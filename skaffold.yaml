@@ -21,9 +21,3 @@ profiles:
     activation:
       - kubeContext: docker-for-desktop
       - kubeContext: docker-desktop
-    portForward:
-    - resourceType: service
-      resourceName: rode
-      namespace: default 
-      port: 50051
-      localPort: 50051

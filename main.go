@@ -9,61 +9,38 @@ import (
 	"os"
 
 	"k8s.io/api/admission/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/klog"
 )
 
-var scheme = runtime.NewScheme()
-var codecs = serializer.NewCodecFactory(scheme)
-
-const (
-	admissionReviewKind = "AdmissionReview"
-)
-
-func vaw(w http.ResponseWriter, r *http.Request) {
+func webhook(w http.ResponseWriter, r *http.Request) {
 	klog.Info("request received")
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		klog.Errorf("Error reading response body: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	deserializer := codecs.UniversalDeserializer()
-	object, gvk, err := deserializer.Decode(body, nil, nil)
-	if err != nil {
-		klog.Errorf("Error decoding body: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
+	if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
+		klog.Errorf("Unexpected content type: %s", contentType)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	admissionReview := &v1.AdmissionReview{}
+	if err := json.Unmarshal(body, admissionReview); err != nil {
+		klog.Errorf("Unable to deserialize request body: %s", err)
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	var responseObj runtime.Object
-	switch *gvk {
-	case v1.SchemeGroupVersion.WithKind(admissionReviewKind):
-		requested, ok := object.(*v1.AdmissionReview)
-		if !ok {
-			klog.Errorf("Expected v1.AdmissionReview, got: %T", object)
-			return
-		}
-		response := &v1.AdmissionReview{}
-		response.SetGroupVersionKind(*gvk)
-		response.Response = &v1.AdmissionResponse{}
-		response.Response.UID = requested.Request.UID
-		response.Response.Allowed = true
-
-		responseObj = response
-	default:
-		msg := fmt.Sprintf("Unsupported group kind version: %v", gvk)
-		klog.Errorf(msg)
-		http.Error(w, msg, http.StatusBadRequest)
-		return
+	admissionReview.Response = &v1.AdmissionResponse{
+		UID:     admissionReview.Request.UID,
+		Allowed: true,
 	}
 
-	klog.Infof("raw response: %v", responseObj)
-	responseBytes, err := json.Marshal(responseObj)
+	klog.Infof("raw response: %v", admissionReview.Response)
+	responseBytes, err := json.Marshal(admissionReview)
 	if err != nil {
 		klog.Errorf("error serializing response: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -81,11 +58,6 @@ func vaw(w http.ResponseWriter, r *http.Request) {
 
 func healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-}
-
-func populateSchema() {
-	utilruntime.Must(v1.AddToScheme(scheme))
-	//utilruntime.Must(corev1.AddToScheme(scheme))
 }
 
 func getEnv(envName string) string {
@@ -109,15 +81,14 @@ func loadTlsConfig() *tls.Config {
 }
 
 func main() {
-	populateSchema()
 	port := 8001
 
-	http.HandleFunc("/", vaw)
+	http.HandleFunc("/", webhook)
 	http.HandleFunc("/healthz", healthz)
 
 	klog.Infof("listening on %d", port)
 	server := &http.Server{
-		Addr: fmt.Sprintf(":%d", port),
+		Addr:      fmt.Sprintf(":%d", port),
 		TLSConfig: loadTlsConfig(),
 	}
 
