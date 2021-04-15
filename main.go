@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 
 	"k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,8 +19,6 @@ var scheme = runtime.NewScheme()
 var codecs = serializer.NewCodecFactory(scheme)
 
 const (
-	certFile = "certs/webhook-server-tls.crt"
-	keyFile = "certs/webhook.key"
 	admissionReviewKind = "AdmissionReview"
 )
 
@@ -89,8 +88,17 @@ func populateSchema() {
 	//utilruntime.Must(corev1.AddToScheme(scheme))
 }
 
+func getEnv(envName string) string {
+	value, present := os.LookupEnv(envName)
+	if !present {
+		klog.Fatalf("Expected %s to be set", envName)
+	}
+
+	return value
+}
+
 func loadTlsConfig() *tls.Config {
-	c, err := tls.LoadX509KeyPair(certFile, keyFile)
+	c, err := tls.LoadX509KeyPair(getEnv("TLS_CLIENT_CERT"), getEnv("TLS_CLIENT_KEY"))
 	if err != nil {
 		klog.Fatalf("error loading cert: %s", err)
 	}
