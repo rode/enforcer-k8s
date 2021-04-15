@@ -82,7 +82,6 @@ func loadTlsConfig() *tls.Config {
 
 func main() {
 	port := 8001
-
 	http.HandleFunc("/", webhook)
 	http.HandleFunc("/healthz", healthz)
 

@@ -2,9 +2,9 @@
 {{ $enforcerCn := printf "%s.%s.svc" .Release.Name .Release.Namespace }}
 {{ $enforcerCert := genSignedCert $enforcerCn nil (list $enforcerCn "localhost") 365 $ca }}
 
-{{ $caCrt := $ca.Cert }}
-{{ $tlsCrt := $enforcerCert.Cert }}
-{{ $tlsKey := $enforcerCert.Key }}
+{{ $caCrt := $ca.Cert | b64enc }}
+{{ $tlsCrt := $enforcerCert.Cert | b64enc }}
+{{ $tlsKey := $enforcerCert.Key | b64enc }}
 
 {{- $secret := (lookup "v1" "Secret" .Release.Namespace .Values.webhook.secretName ) }}
 {{- if $secret }}
@@ -27,9 +27,9 @@ metadata:
     "helm.sh/hook-delete-policy": "before-hook-creation"
 type: Opaque
 data:
-  ca.crt: {{ b64enc $caCrt }}
-  tls.crt: {{ b64enc $tlsCrt }}
-  tls.key: {{ b64enc $tlsKey }}
+  ca.crt: {{ $caCrt }}
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
 
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -57,6 +57,6 @@ webhooks:
         name: {{ include "enforcer-k8s.fullname" . }}
         path: /
         port: 8001
-      caBundle: {{ b64enc $caCrt }}
+      caBundle: {{ $caCrt }}
     admissionReviewVersions: [ "v1" ]
     timeoutSeconds: 5
