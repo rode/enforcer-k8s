@@ -21,7 +21,6 @@ metadata:
     app: {{ include "enforcer-k8s.fullname" . }}
     chart: "{{ $.Chart.Name }}-{{ $.Chart.Version }}"
     release: "{{ $.Release.Name }}"
-    heritage: "{{ $.Release.Service }}"
   annotations:
     "helm.sh/hook": "pre-install"
     "helm.sh/hook-delete-policy": "before-hook-creation"

@@ -31,14 +31,10 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          volumeMounts:
-          - name: certificates
-            mountPath: /certificates
-          env:
-            - name: TLS_CLIENT_CERT
-              value: /certificates/tls.crt
-            - name: TLS_CLIENT_KEY
-              value: /certificates/tls.key
+          args:
+            - "--tls-secret={{ .Values.webhook.secretName }}"
+            - "--policy-id={{ .Values.webhook.policyId }}"
+            - "--rode-host=rode.rode-demo.svc.cluster.local:50051"
           ports:
             - name: http
               containerPort: 8001
@@ -55,10 +51,6 @@ spec:
               port: 8001
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      volumes:
-        - name: certificates
-          secret:
-            secretName: {{ .Values.webhook.secretName }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
