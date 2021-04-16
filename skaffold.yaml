@@ -1,0 +1,24 @@
+apiVersion: skaffold/v2beta9
+kind: Config
+build:
+  local:
+    useBuildkit: true
+  artifacts:
+    - image: enforcer-k8s
+      context: ./
+deploy:
+  helm:
+    releases:
+      - name: enforcer-k8s
+        chartPath: enforcer-k8s
+        wait: true
+        artifactOverrides:
+          image: enforcer-k8s
+        imageStrategy:
+          helm: {}
+profiles:
+  - name: local
+    activation:
+      - kubeContext: docker-for-desktop
+      - kubeContext: docker-desktop
+
