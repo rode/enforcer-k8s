@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,10 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"google.golang.org/grpc"
 
-	"github.com/heroku/docker-registry-client/registry"
+	"go.uber.org/zap"
 
 	rode "github.com/rode/rode/proto/v1alpha1"
 	"k8s.io/api/admission/v1"
@@ -28,22 +30,22 @@ import (
 )
 
 var (
-	log      *zap.Logger
-	client   *kubernetes.Clientset
-	conf *config
+	log        *zap.Logger
+	client     *kubernetes.Clientset
+	conf       *config
 	rodeClient rode.RodeClient
 )
 
 type config struct {
-	policyId string
+	policyId      string
 	tlsSecretName string
-	port int
-	rodeHost string
+	port          int
+	rodeHost      string
 }
 
 func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 	response := &v1.AdmissionResponse{
-		UID:     review.Request.UID,
+		UID: review.Request.UID,
 		Allowed: true,
 	}
 
@@ -58,34 +60,38 @@ func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 		response.Allowed = false
 		return response, nil
 	}
+	insecure := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 
 	for _, container := range pod.Spec.Containers {
-		// find container status
-		var status corev1.ContainerStatus
-		for _, s := range pod.Status.ContainerStatuses {
-			if s.Name == container.Name {
-				status = s
-			}
+		ref, err := name.ParseReference(container.Image)
+		if err != nil {
+			log.Error("error parsing image reference", zap.Error(err), zap.String("image", container.Image))
+			response.Allowed = false
+			return response, nil
 		}
-		if status.Name == "" {
-			log.Error("could not find container status", zap.Any("container", container))
+		img, err := remote.Image(ref, remote.WithTransport(insecure))
+		if err != nil {
+			log.Error("error fetching image", zap.Error(err), zap.String("image", container.Image))
 			response.Allowed = false
 			return response, nil
 		}
 
-		
+		digest, err := img.Digest()
+		if err != nil {
+			log.Error("error calculating digest", zap.Error(err), zap.String("image", container.Image))
+			response.Allowed = false
+			return response, nil
+		}
 
-		hub, err := registry.New("http://harbor.localhost", "", "")
+		imageResourceUri := ref.Context().Digest(digest.String()).String()
 
-		manifest, err := hub.ManifestV2("rode-demo/alpine", "latest")
-
-
-		imageId := strings.TrimPrefix(status.ImageID, "docker-pullable://")
-		log.Debug("evaluating policy against image", zap.String("image", imageId))
+		log.Debug("evaluating policy against image", zap.String("image", imageResourceUri))
 
 		res, err := rodeClient.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
 			Policy: conf.policyId,
-			ResourceUri: imageId,
+			ResourceUri: imageResourceUri,
 		})
 		if err != nil {
 			log.Error("error evaluating policy", zap.Error(err))
@@ -256,10 +262,10 @@ func main() {
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
-		Addr:      fmt.Sprintf(":%d", conf.port),
+		Addr: fmt.Sprintf(":%d", conf.port),
 	}
 
-	go func(){
+	go func() {
 		if err := server.ListenAndServeTLS(certFile.Name(), keyFile.Name()); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal("error starting server", zap.Error(err))
 		}
