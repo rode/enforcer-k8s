@@ -190,7 +190,7 @@ func main() {
 
 	client = newK8sClient()
 
-	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Secret, metav1.GetOptions{})
+	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
 	if err != nil {
 		log.Fatal("Failed to find secret", zap.Error(err), zap.String("secret", conf.Tls.Secret))
 	}
