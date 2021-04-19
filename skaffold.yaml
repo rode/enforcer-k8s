@@ -10,7 +10,7 @@ deploy:
   helm:
     releases:
       - name: enforcer-k8s
-        chartPath: enforcer-k8s
+        chartPath: charts/enforcer-k8s
         wait: true
         artifactOverrides:
           image: enforcer-k8s
