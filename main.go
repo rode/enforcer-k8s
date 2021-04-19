@@ -59,7 +59,7 @@ type config struct {
 
 func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 	response := &v1.AdmissionResponse{
-		UID: review.Request.UID,
+		UID:     review.Request.UID,
 		Allowed: true,
 	}
 
@@ -104,7 +104,7 @@ func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 		log.Debug("evaluating policy against image", zap.String("image", imageResourceUri))
 
 		res, err := rodeClient.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
-			Policy: conf.policyId,
+			Policy:      conf.policyId,
 			ResourceUri: imageResourceUri,
 		})
 		if err != nil {
