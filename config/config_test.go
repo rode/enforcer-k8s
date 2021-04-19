@@ -5,24 +5,53 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+type entry struct {
+	flags       []string
+	expected    *Config
+	expectError bool
+}
+
 var _ = DescribeTable("config",
-	func(flags []string, expectError bool, expected *Config) {
-		conf, err := Build("rode", flags)
-		if expectError {
+	func(e entry) {
+		conf, err := Build("rode", e.flags)
+		if e.expectError {
 			Expect(err).To(HaveOccurred())
 		} else {
 			Expect(err).ToNot(HaveOccurred())
-			Expect(conf).To(BeEquivalentTo(expected))
+			Expect(conf).To(BeEquivalentTo(e.expected))
 		}
 	},
-	Entry("base config", []string{"--policy-id=foo", "--tls-secret=foo/bar", "--rode-host=localhost:50051"}, false, &Config{
-		Tls: &TlsConfig{
-			Secret:    "foo/bar",
-			Namespace: "foo",
-			Name:      "bar",
+	Entry("base config", entry{
+		flags: []string{"--policy-id=foo", "--tls-secret=foo/bar", "--rode-host=localhost:50051"},
+		expected: &Config{
+			Tls: &TlsConfig{
+				Secret:    "foo/bar",
+				Namespace: "foo",
+				Name:      "bar",
+			},
+			PolicyId: "foo",
+			RodeHost: "localhost:50051",
+			Port:     8001,
 		},
-		PolicyId: "foo",
-		RodeHost: "localhost:50051",
-		Port:     8001,
+	}),
+	Entry("missing policy ID", entry{
+		flags:       []string{"--tls-secret=foo/bar", "--rode-host=localhost:50051"},
+		expectError: true,
+	}),
+	Entry("missing tls secret", entry{
+		flags:       []string{"--policy-id=foo", "--rode-host=localhost:50051"},
+		expectError: true,
+	}),
+	Entry("missing rode host", entry{
+		flags:       []string{"--policy-id=foo", "--tls-secret=foo/bar"},
+		expectError: true,
+	}),
+	Entry("bad tls secret namespaced name", entry{
+		flags:       []string{"--policy-id=foo", "--tls-secret=foo", "--rode-host=localhost:50051"},
+		expectError: true,
+	}),
+	Entry("bad flag parsing", entry{
+		flags:       []string{"--this isn't a flag"},
+		expectError: true,
 	}),
 )
