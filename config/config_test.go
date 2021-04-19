@@ -3,6 +3,8 @@ package config
 import (
 	. "github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
+	"k8s.io/client-go/util/homedir"
+	"path/filepath"
 )
 
 type entry struct {
@@ -28,6 +30,10 @@ var _ = DescribeTable("config",
 				Secret:    "foo/bar",
 				Namespace: "foo",
 				Name:      "bar",
+			},
+			Kubernetes: &KubernetesConfig{
+				InCluster:  true,
+				ConfigFile: filepath.Join(homedir.HomeDir(), ".kube", "config"),
 			},
 			PolicyId: "foo",
 			RodeHost: "localhost:50051",

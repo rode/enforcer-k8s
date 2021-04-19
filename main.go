@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/rode/enforcer-k8s/config"
 	"io/ioutil"
+	"k8s.io/client-go/tools/clientcmd"
 	"net/http"
 	"os"
 	"os/signal"
@@ -45,11 +46,10 @@ import (
 var (
 	log        *zap.Logger
 	client     *kubernetes.Clientset
-	conf       *config.Config
 	rodeClient rode.RodeClient
 )
 
-func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
+func enforce(review *v1.AdmissionReview, policyId string) (*v1.AdmissionResponse, error) {
 	response := &v1.AdmissionResponse{
 		UID:     review.Request.UID,
 		Allowed: true,
@@ -96,7 +96,7 @@ func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 		log.Debug("evaluating policy against image", zap.String("image", imageResourceUri))
 
 		res, err := rodeClient.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
-			Policy:      conf.PolicyId,
+			Policy:      policyId,
 			ResourceUri: imageResourceUri,
 		})
 		if err != nil {
@@ -114,65 +114,76 @@ func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 	return response, nil
 }
 
-func webhook(w http.ResponseWriter, r *http.Request) {
-	log.Info("request received")
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		log.Error("Error reading response body", zap.Error(err))
-		w.WriteHeader(http.StatusBadRequest)
-		return
+func webhook(policyId string) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Info("request received")
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			log.Error("Error reading response body", zap.Error(err))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
+			log.Error("Unexpected content type", zap.String("contentType", contentType))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		admissionReview := &v1.AdmissionReview{}
+		if err := json.Unmarshal(body, admissionReview); err != nil {
+			log.Error("Unable to deserialize request body: %s", zap.Error(err))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		response, err := enforce(admissionReview, policyId)
+		if err != nil {
+			log.Error("error building admission response", zap.Error(err))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		admissionReview.Response = response
+
+		log.Info("raw response", zap.Any("response", admissionReview.Response))
+		responseBytes, err := json.Marshal(admissionReview)
+		if err != nil {
+			log.Error("error serializing response", zap.Error(err))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write(responseBytes); err != nil {
+			log.Error("error writing response", zap.Error(err))
+			return
+		}
+
+		log.Info("successful request")
 	}
-
-	if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
-		log.Error("Unexpected content type", zap.String("contentType", contentType))
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	admissionReview := &v1.AdmissionReview{}
-	if err := json.Unmarshal(body, admissionReview); err != nil {
-		log.Error("Unable to deserialize request body: %s", zap.Error(err))
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	response, err := enforce(admissionReview)
-	if err != nil {
-		log.Error("error building admission response", zap.Error(err))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	admissionReview.Response = response
-
-	log.Info("raw response", zap.Any("response", admissionReview.Response))
-	responseBytes, err := json.Marshal(admissionReview)
-	if err != nil {
-		log.Error("error serializing response", zap.Error(err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(responseBytes); err != nil {
-		log.Error("error writing response", zap.Error(err))
-		return
-	}
-
-	log.Info("successful request")
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func newK8sClient() *kubernetes.Clientset {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		log.Fatal("Failed to get cluster config", zap.Error(err))
+func newK8sClient(kubernetesConfig *config.KubernetesConfig) *kubernetes.Clientset {
+	var (
+		clusterConfig *rest.Config
+		err           error
+	)
+
+	if kubernetesConfig.InCluster {
+		clusterConfig, err = rest.InClusterConfig()
+		if err != nil {
+			log.Fatal("Failed to get cluster config", zap.Error(err))
+		}
+	} else {
+		clusterConfig, err = clientcmd.BuildConfigFromFlags("", kubernetesConfig.ConfigFile)
 	}
 
-	client, err := kubernetes.NewForConfig(config)
+	client, err := kubernetes.NewForConfig(clusterConfig)
 	if err != nil {
 		log.Fatal("Error creating kubernetes client", zap.Error(err))
 	}
@@ -188,7 +199,7 @@ func main() {
 		log.Fatal("failed to build config", zap.Error(err))
 	}
 
-	client = newK8sClient()
+	client = newK8sClient(conf.Kubernetes)
 
 	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
 	if err != nil {
@@ -243,7 +254,7 @@ func main() {
 
 	rodeClient = rode.NewRodeClient(conn)
 
-	http.HandleFunc("/", webhook)
+	http.HandleFunc("/", webhook(conf.PolicyId))
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
