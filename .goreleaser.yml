@@ -24,7 +24,7 @@ changelog:
       - '^test:'
 dockers:
   - image_templates:
-      - "ghcr.io/rode/rode:latest"
+      - "ghcr.io/rode/enforcer-k8s:latest"
       - "ghcr.io/rode/enforcer-k8s:{{ .Tag }}"
       - "ghcr.io/rode/enforcer-k8s:v{{ .Major }}"
       - "ghcr.io/rode/enforcer-k8s:v{{ .Major }}.{{ .Minor }}"
