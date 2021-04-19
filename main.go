@@ -19,13 +19,12 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
+	"github.com/rode/enforcer-k8s/config"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -46,16 +45,9 @@ import (
 var (
 	log        *zap.Logger
 	client     *kubernetes.Clientset
-	conf       *config
+	conf       *config.Config
 	rodeClient rode.RodeClient
 )
-
-type config struct {
-	policyId      string
-	tlsSecretName string
-	port          int
-	rodeHost      string
-}
 
 func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 	response := &v1.AdmissionResponse{
@@ -104,7 +96,7 @@ func enforce(review *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 		log.Debug("evaluating policy against image", zap.String("image", imageResourceUri))
 
 		res, err := rodeClient.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
-			Policy:      conf.policyId,
+			Policy:      conf.PolicyId,
 			ResourceUri: imageResourceUri,
 		})
 		if err != nil {
@@ -188,49 +180,28 @@ func newK8sClient() *kubernetes.Clientset {
 	return client
 }
 
-func getCurrentNamespace() (string, error) {
-	b, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(b)), nil
-}
-
 func main() {
 	log, _ = zap.NewDevelopment()
 
-	conf = &config{}
-
-	flag.StringVar(&conf.policyId, "policy-id", "", "The ID of the policy that the resource uri is evaluated against.")
-	flag.StringVar(&conf.tlsSecretName, "tls-secret", "", "Secret name that holds the webhook TLS configuration")
-	flag.StringVar(&conf.rodeHost, "rode-host", "", "Rode host")
-	flag.IntVar(&conf.port, "port", 8001, "The port to bind")
-	flag.Parse()
-
-	if conf.policyId == "" {
-		log.Fatal("must set policy id")
-	}
-
-	namespace, err := getCurrentNamespace()
+	conf, err := config.Build(os.Args[0], os.Args[1:])
 	if err != nil {
-		log.Fatal("Error retrieving namespace", zap.Error(err))
+		log.Fatal("failed to build config", zap.Error(err))
 	}
 
 	client = newK8sClient()
 
-	secret, err := client.CoreV1().Secrets(namespace).Get(context.Background(), conf.tlsSecretName, metav1.GetOptions{})
+	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Secret, metav1.GetOptions{})
 	if err != nil {
-		log.Fatal("Failed to find secret", zap.Error(err))
+		log.Fatal("Failed to find secret", zap.Error(err), zap.String("secret", conf.Tls.Secret))
 	}
 	certData, ok := secret.Data["tls.crt"]
 	if !ok {
-		log.Fatal("secret missing tls.crt", zap.String("secret", conf.tlsSecretName))
+		log.Fatal("secret missing tls.crt", zap.String("secret", conf.Tls.Secret))
 	}
 
 	keyData, ok := secret.Data["tls.key"]
 	if !ok {
-		log.Fatal("secret missing tls.key", zap.String("secret", conf.tlsSecretName))
+		log.Fatal("secret missing tls.key", zap.String("secret", conf.Tls.Secret))
 	}
 
 	certFile, err := ioutil.TempFile(os.TempDir(), "cert-")
@@ -264,7 +235,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, conf.rodeHost, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, conf.RodeHost, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Fatal("failed to establish grpc connection to Rode", zap.Error(err))
 	}
@@ -276,7 +247,7 @@ func main() {
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
-		Addr: fmt.Sprintf(":%d", conf.port),
+		Addr: fmt.Sprintf(":%d", conf.Port),
 	}
 
 	go func() {
@@ -285,7 +256,7 @@ func main() {
 		}
 	}()
 
-	log.Info("listening", zap.Int("port", conf.port))
+	log.Info("listening", zap.Int("port", conf.Port))
 
 	s := make(chan os.Signal, 1)
 	signal.Notify(s, syscall.SIGINT, syscall.SIGTERM)
