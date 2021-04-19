@@ -41,7 +41,7 @@ func Build(name string, args []string) (*Config, error) {
 	flags.StringVar(&conf.RodeHost, "rode-host", "", "rode host")
 	flags.IntVar(&conf.Port, "port", 8001, "the port to bind")
 
-	flags.BoolVar(&conf.Kubernetes.InCluster, "k8s-in-cluster", true, "when set, the bot will use the in-cluster k8s config")
+	flags.BoolVar(&conf.Kubernetes.InCluster, "k8s-in-cluster", true, "when set, the enforcer will use the in-cluster k8s config")
 	flags.StringVar(&conf.Kubernetes.ConfigFile, "k8s-config-file", filepath.Join(homedir.HomeDir(), ".kube", "config"), "path to k8s config file when running outside the cluster")
 
 	err := flags.Parse(args)

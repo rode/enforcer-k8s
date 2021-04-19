@@ -1,5 +1,5 @@
 .PHONY: test fmtcheck vet fmt coverage
-GOFMT_FILES?=$$(find . -name '*.go' | grep -v proto)
+GOFMT_FILES?=$$(find . -name '*.go')
 
 GO111MODULE=on
 
