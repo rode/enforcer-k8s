@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/rode/enforcer-k8s/config"
 	"github.com/rode/enforcer-k8s/enforcer"
+	"google.golang.org/grpc/credentials"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"google.golang.org/grpc"
@@ -118,6 +120,52 @@ func newK8sClient(log *zap.Logger, kubernetesConfig *config.KubernetesConfig) *k
 	return client
 }
 
+func newRodeClient(log *zap.Logger, conf *config.Config) (*grpc.ClientConn, rode.RodeClient) {
+	dialOptions := []grpc.DialOption{
+		grpc.WithBlock(),
+	}
+	if conf.Rode.Insecure {
+		dialOptions = append(dialOptions, grpc.WithInsecure())
+	} else {
+		dialOptions = append(dialOptions, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, conf.Rode.Host, dialOptions...)
+	if err != nil {
+		log.Fatal("failed to establish grpc connection to Rode", zap.Error(err))
+	}
+
+	return conn, rode.NewRodeClient(conn)
+}
+
+func createTlsConfig(log *zap.Logger, conf *config.Config, client *kubernetes.Clientset) *tls.Config {
+	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
+	if err != nil {
+		log.Fatal("Failed to find secret", zap.Error(err), zap.String("secret", conf.Tls.Secret))
+	}
+
+	cert, ok := secret.Data["tls.crt"]
+	if !ok {
+		log.Fatal("Secret missing tls.crt", zap.String("secret", conf.Tls.Secret))
+	}
+
+	key, ok := secret.Data["tls.key"]
+	if !ok {
+		log.Fatal("Secret missing tls.key", zap.String("secret", conf.Tls.Secret))
+	}
+
+	certificate, err := tls.X509KeyPair(cert, key)
+	if err != nil {
+		log.Fatal("Error loading key pair", zap.Error(err))
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+	}
+}
+
 func main() {
 	log, _ := zap.NewDevelopment()
 
@@ -128,72 +176,25 @@ func main() {
 
 	client := newK8sClient(log, conf.Kubernetes)
 
-	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
-	if err != nil {
-		log.Fatal("Failed to find secret", zap.Error(err), zap.String("secret", conf.Tls.Secret))
-	}
-	certData, ok := secret.Data["tls.crt"]
-	if !ok {
-		log.Fatal("secret missing tls.crt", zap.String("secret", conf.Tls.Secret))
-	}
-
-	keyData, ok := secret.Data["tls.key"]
-	if !ok {
-		log.Fatal("secret missing tls.key", zap.String("secret", conf.Tls.Secret))
-	}
-
-	certFile, err := ioutil.TempFile(os.TempDir(), "cert-")
-	if err != nil {
-		log.Fatal("error creating temp file for cert", zap.Error(err))
-	}
-
-	keyFile, err := ioutil.TempFile(os.TempDir(), "key-")
-	if err != nil {
-		log.Fatal("error creating temp file for key", zap.Error(err))
-	}
-
-	defer os.Remove(certFile.Name())
-	defer os.Remove(keyFile.Name())
-
-	if _, err := certFile.Write(certData); err != nil {
-		log.Fatal("error writing cert file", zap.Error(err))
-	}
-
-	if err := certFile.Close(); err != nil {
-		log.Fatal("error closing cert file", zap.Error(err))
-	}
-
-	if _, err := keyFile.Write(keyData); err != nil {
-		log.Fatal("error writing key file", zap.Error(err))
-	}
-
-	if err := keyFile.Close(); err != nil {
-		log.Fatal("error closing key file", zap.Error(err))
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-	conn, err := grpc.DialContext(ctx, conf.RodeHost, grpc.WithInsecure(), grpc.WithBlock())
-	if err != nil {
-		log.Fatal("failed to establish grpc connection to Rode", zap.Error(err))
-	}
+	conn, rodeClient := newRodeClient(log, conf)
 	defer conn.Close()
 
 	k8sEnforcer := enforcer.NewEnforcer(
 		log.Named("Enforcer"),
 		conf,
-		rode.NewRodeClient(conn),
+		rodeClient,
 	)
 
 	http.HandleFunc("/", webhook(log, k8sEnforcer))
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
-		Addr: fmt.Sprintf(":%d", conf.Port),
+		Addr:      fmt.Sprintf(":%d", conf.Port),
+		TLSConfig: createTlsConfig(log, conf, client),
 	}
 
 	go func() {
-		if err := server.ListenAndServeTLS(certFile.Name(), keyFile.Name()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal("error starting server", zap.Error(err))
 		}
 	}()

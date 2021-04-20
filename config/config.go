@@ -17,18 +17,24 @@ package config
 import (
 	"errors"
 	"flag"
-	"k8s.io/client-go/util/homedir"
 	"path/filepath"
 	"strings"
+
+	"k8s.io/client-go/util/homedir"
 )
 
 type Config struct {
 	PolicyId   string
 	Tls        *TlsConfig
 	Kubernetes *KubernetesConfig
+	Rode       *RodeConfig
 	Port       int
-	RodeHost   string
 	Namespace  string
+}
+
+type RodeConfig struct {
+	Host     string
+	Insecure bool
 }
 
 type TlsConfig struct {
@@ -48,11 +54,13 @@ func Build(name string, args []string) (*Config, error) {
 	conf := &Config{
 		Tls:        &TlsConfig{},
 		Kubernetes: &KubernetesConfig{},
+		Rode:       &RodeConfig{},
 	}
 
 	flags.StringVar(&conf.PolicyId, "policy-id", "", "the ID of the rode policy to evaluate when attempting to admit a pod")
 	flags.StringVar(&conf.Tls.Secret, "tls-secret", "", "the namespaced name of the TLS secret containing the certificate / private key for the webhook TLS configuration. should be in the format ${namespace}/${name}")
-	flags.StringVar(&conf.RodeHost, "rode-host", "", "rode host")
+	flags.StringVar(&conf.Rode.Host, "rode-host", "", "rode host")
+	flags.BoolVar(&conf.Rode.Insecure, "rode-insecure", false, "when set, the connection to rode will not use TLS")
 	flags.IntVar(&conf.Port, "port", 8001, "the port to bind")
 
 	flags.BoolVar(&conf.Kubernetes.InCluster, "k8s-in-cluster", true, "when set, the enforcer will use the in-cluster k8s config")
@@ -71,7 +79,7 @@ func Build(name string, args []string) (*Config, error) {
 		return nil, errors.New("--tls-secret is required")
 	}
 
-	if conf.RodeHost == "" {
+	if conf.Rode.Host == "" {
 		return nil, errors.New("--rode-host is required")
 	}
 
