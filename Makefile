@@ -1,4 +1,4 @@
-.PHONY: test fmtcheck vet fmt coverage
+.PHONY: test fmtcheck vet fmt coverage mocks
 GOFMT_FILES?=$$(find . -name '*.go')
 
 GO111MODULE=on
@@ -8,6 +8,10 @@ fmtcheck:
 
 fmt:
 	gofmt -w -s $(GOFMT_FILES)
+
+mocks:
+	go install github.com/golang/mock/mockgen@v1.5.0
+	go generate ./...
 
 vet:
 	go vet ./...
