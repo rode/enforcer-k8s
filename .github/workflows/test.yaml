@@ -33,5 +33,5 @@ jobs:
     - name: Check License Headers
       run: |
         shopt -s globstar
-        addlicense -check **/*.{go}
+        addlicense -check **/*.go
       shell: bash
