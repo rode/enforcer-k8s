@@ -1,2 +1,5 @@
 .idea/
-
+.vscode/
+coverage.txt
+.DS_Store
+enforcer-k8s

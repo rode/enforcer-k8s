@@ -33,3 +33,4 @@ dockers:
       - "go.sum"
       - "main.go"
       - "config"
+      - "enforcer"
