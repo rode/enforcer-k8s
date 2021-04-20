@@ -1,6 +1,5 @@
-.PHONY: test fmtcheck vet fmt coverage mocks
+.PHONY: test fmtcheck vet fmt coverage mocks license
 GOFMT_FILES?=$$(find . -name '*.go')
-
 GO111MODULE=on
 
 fmtcheck:
@@ -12,6 +11,9 @@ fmt:
 mocks:
 	go install github.com/golang/mock/mockgen@v1.5.0
 	go generate ./...
+
+license:
+	addlicense -c 'The Rode Authors' $(GOFMT_FILES)
 
 vet:
 	go vet ./...
