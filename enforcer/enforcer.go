@@ -57,18 +57,18 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 
 	response := &v1.AdmissionResponse{
 		UID:     admissionReview.Request.UID,
-		Allowed: true,
+		Allowed: false,
 	}
 
 	objectKind := admissionReview.Request.Kind.Kind
 	if objectKind != "Pod" {
+		response.Allowed = true
 		return response, nil
 	}
 
 	var pod corev1.Pod
 	if err := json.Unmarshal(admissionReview.Request.Object.Raw, &pod); err != nil {
 		log.Error("error unmarshalling pod", zap.Error(err))
-		response.Allowed = false
 		return response, nil
 	}
 
@@ -80,21 +80,18 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 		ref, err := name.ParseReference(container.Image)
 		if err != nil {
 			log.Error("error parsing image reference", zap.Error(err), zap.String("image", container.Image))
-			response.Allowed = false
 			return response, nil
 		}
 
 		img, err := getImageManifest(ref, remote.WithTransport(insecure))
 		if err != nil {
 			log.Error("error fetching image", zap.Error(err), zap.String("image", container.Image))
-			response.Allowed = false
 			return response, nil
 		}
 
 		digest, err := img.Digest()
 		if err != nil {
 			log.Error("error calculating digest", zap.Error(err), zap.String("image", container.Image))
-			response.Allowed = false
 			return response, nil
 		}
 
@@ -109,16 +106,16 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 
 		if err != nil {
 			log.Error("error evaluating policy", zap.Error(err))
-			response.Allowed = false
 			return response, nil
 		}
 
 		if !res.Pass {
 			log.Info("policy evaluation failed", zap.Any("result", res.Result))
-			response.Allowed = false
 			return response, nil
 		}
 	}
+
+	response.Allowed = true
 
 	return response, nil
 }

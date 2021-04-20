@@ -126,11 +126,6 @@ var _ = Describe("Enforcer", func() {
 			})
 		})
 
-		//When("a pod has multiple containers", func() {
-		//
-		//
-		//})
-
 		When("the image name cannot be parsed", func() {
 			BeforeEach(func() {
 				admissionReview.Request.Object.Raw = createPodBody("invalid@foo")

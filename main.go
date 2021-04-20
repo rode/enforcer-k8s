@@ -41,13 +41,7 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-var (
-	log        *zap.Logger
-	client     *kubernetes.Clientset
-	rodeClient rode.RodeClient
-)
-
-func webhook(k8sEnforcer *enforcer.Enforcer) func(w http.ResponseWriter, r *http.Request) {
+func webhook(log *zap.Logger, k8sEnforcer *enforcer.Enforcer) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Info("request received")
 		body, err := ioutil.ReadAll(r.Body)
@@ -101,7 +95,7 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func newK8sClient(kubernetesConfig *config.KubernetesConfig) *kubernetes.Clientset {
+func newK8sClient(log *zap.Logger, kubernetesConfig *config.KubernetesConfig) *kubernetes.Clientset {
 	var (
 		clusterConfig *rest.Config
 		err           error
@@ -125,14 +119,14 @@ func newK8sClient(kubernetesConfig *config.KubernetesConfig) *kubernetes.Clients
 }
 
 func main() {
-	log, _ = zap.NewDevelopment()
+	log, _ := zap.NewDevelopment()
 
 	conf, err := config.Build(os.Args[0], os.Args[1:])
 	if err != nil {
 		log.Fatal("failed to build config", zap.Error(err))
 	}
 
-	client = newK8sClient(conf.Kubernetes)
+	client := newK8sClient(log, conf.Kubernetes)
 
 	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
 	if err != nil {
@@ -185,15 +179,13 @@ func main() {
 	}
 	defer conn.Close()
 
-	rodeClient = rode.NewRodeClient(conn)
-
 	k8sEnforcer := enforcer.NewEnforcer(
 		log.Named("Enforcer"),
 		conf,
-		rodeClient,
+		rode.NewRodeClient(conn),
 	)
 
-	http.HandleFunc("/", webhook(k8sEnforcer))
+	http.HandleFunc("/", webhook(log, k8sEnforcer))
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
