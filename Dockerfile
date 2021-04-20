@@ -7,6 +7,7 @@ RUN go mod download
 
 COPY main.go main.go
 COPY config config
+COPY enforcer enforcer
 
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o enforcer-k8s
 

@@ -16,28 +16,26 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/rode/enforcer-k8s/config"
 	"io/ioutil"
-	"k8s.io/client-go/tools/clientcmd"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/rode/enforcer-k8s/config"
+	"github.com/rode/enforcer-k8s/enforcer"
+	"k8s.io/client-go/tools/clientcmd"
+
 	"google.golang.org/grpc"
 
 	"go.uber.org/zap"
 
 	rode "github.com/rode/rode/proto/v1alpha1"
 	"k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -49,72 +47,7 @@ var (
 	rodeClient rode.RodeClient
 )
 
-func enforce(review *v1.AdmissionReview, policyId string) (*v1.AdmissionResponse, error) {
-	response := &v1.AdmissionResponse{
-		UID:     review.Request.UID,
-		Allowed: true,
-	}
-
-	objectKind := review.Request.Kind.Kind
-	if objectKind != "Pod" {
-		return response, nil
-	}
-
-	var pod corev1.Pod
-	if err := json.Unmarshal(review.Request.Object.Raw, &pod); err != nil {
-		log.Error("error unmarshalling pod", zap.Error(err))
-		response.Allowed = false
-		return response, nil
-	}
-	insecure := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-
-	for _, container := range pod.Spec.Containers {
-		ref, err := name.ParseReference(container.Image)
-		if err != nil {
-			log.Error("error parsing image reference", zap.Error(err), zap.String("image", container.Image))
-			response.Allowed = false
-			return response, nil
-		}
-		img, err := remote.Image(ref, remote.WithTransport(insecure))
-		if err != nil {
-			log.Error("error fetching image", zap.Error(err), zap.String("image", container.Image))
-			response.Allowed = false
-			return response, nil
-		}
-
-		digest, err := img.Digest()
-		if err != nil {
-			log.Error("error calculating digest", zap.Error(err), zap.String("image", container.Image))
-			response.Allowed = false
-			return response, nil
-		}
-
-		imageResourceUri := ref.Context().Digest(digest.String()).String()
-
-		log.Debug("evaluating policy against image", zap.String("image", imageResourceUri))
-
-		res, err := rodeClient.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
-			Policy:      policyId,
-			ResourceUri: imageResourceUri,
-		})
-		if err != nil {
-			log.Error("error evaluating policy", zap.Error(err))
-			response.Allowed = false
-			return response, nil
-		}
-		if !res.Pass {
-			log.Info("policy evaluation failed", zap.Any("result", res.Result))
-			response.Allowed = false
-			return response, nil
-		}
-	}
-
-	return response, nil
-}
-
-func webhook(policyId string) func(w http.ResponseWriter, r *http.Request) {
+func webhook(k8sEnforcer *enforcer.Enforcer) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Info("request received")
 		body, err := ioutil.ReadAll(r.Body)
@@ -137,7 +70,7 @@ func webhook(policyId string) func(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		response, err := enforce(admissionReview, policyId)
+		response, err := k8sEnforcer.Enforce(admissionReview)
 		if err != nil {
 			log.Error("error building admission response", zap.Error(err))
 			w.WriteHeader(http.StatusInternalServerError)
@@ -254,7 +187,13 @@ func main() {
 
 	rodeClient = rode.NewRodeClient(conn)
 
-	http.HandleFunc("/", webhook(conf.PolicyId))
+	k8sEnforcer := enforcer.NewEnforcer(
+		log.Named("Enforcer"),
+		conf,
+		rodeClient,
+	)
+
+	http.HandleFunc("/", webhook(k8sEnforcer))
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
