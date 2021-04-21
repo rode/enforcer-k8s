@@ -78,7 +78,11 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 		return response, nil
 	}
 
-	for _, container := range pod.Spec.Containers {
+	var allContainers []corev1.Container
+	allContainers = append(allContainers, pod.Spec.InitContainers...)
+	allContainers = append(allContainers, pod.Spec.Containers...)
+
+	for _, container := range allContainers {
 		if pass := e.evaluatePolicy(log, response, container.Image); !pass {
 			return response, nil
 		}

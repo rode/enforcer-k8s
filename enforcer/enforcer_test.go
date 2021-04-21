@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -221,7 +222,6 @@ var _ = Describe("Enforcer", func() {
 		})
 
 		When("the container image fails policy and retrieving the policy name fails", func() {
-
 			BeforeEach(func() {
 				mockRode.EXPECT().
 					EvaluatePolicy(gomock.Any(), gomock.Any()).
@@ -239,6 +239,54 @@ var _ = Describe("Enforcer", func() {
 
 			It("should not return an error", func() {
 				Expect(actualError).NotTo(HaveOccurred())
+			})
+		})
+
+		When("an init container fails policy", func() {
+			var (
+				initContainerImage string
+			)
+
+			BeforeEach(func() {
+				initContainerImage = "harbor.localhost/rode-demo/pause"
+				pod := corev1.Pod{
+					Spec: corev1.PodSpec{
+						InitContainers: []corev1.Container{
+							{
+								Image: initContainerImage,
+							},
+						},
+						Containers: []corev1.Container{
+							{
+								Image: "harbor.localhost/rode-demo/nginx:latest",
+							},
+						},
+					},
+				}
+
+				data, err := json.Marshal(pod)
+				Expect(err).NotTo(HaveOccurred())
+
+				admissionReview.Request.Object.Raw = data
+
+				mockRode.EXPECT().
+					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
+					Return(&rode.Policy{Policy: &rode.PolicyEntity{Name: fake.Word()}}, nil)
+
+				mockRode.
+					EXPECT().
+					EvaluatePolicy(gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ context.Context, r *rode.EvaluatePolicyRequest) (*rode.EvaluatePolicyResponse, error) {
+						return &rode.EvaluatePolicyResponse{
+							Pass: !strings.Contains(r.ResourceUri, initContainerImage),
+						}, nil
+					}).
+					AnyTimes()
+			})
+
+			It("should deny the request", func() {
+				Expect(actualResponse.Allowed).To(BeFalse())
+				Expect(actualResponse.Result.Message).To(ContainSubstring(initContainerImage))
 			})
 		})
 
@@ -292,15 +340,15 @@ var _ = Describe("Enforcer", func() {
 	})
 })
 
-func createPodBody(containers ...string) []byte {
+func createPodBody(image string) []byte {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{},
+			Containers: []corev1.Container{
+				{
+					Image: image,
+				},
+			},
 		},
-	}
-
-	for _, container := range containers {
-		pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Image: container})
 	}
 
 	data, err := json.Marshal(pod)
