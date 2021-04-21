@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/golang/mock/gomock"
@@ -194,14 +195,46 @@ var _ = Describe("Enforcer", func() {
 		})
 
 		When("the container image fails policy", func() {
+			var (
+				expectedPolicyName string
+			)
+
+			BeforeEach(func() {
+				expectedPolicyName = fake.Word()
+				mockRode.EXPECT().
+					EvaluatePolicy(gomock.Any(), gomock.Any()).
+					Return(&rode.EvaluatePolicyResponse{Pass: false}, nil)
+
+				mockRode.EXPECT().
+					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
+					Return(&rode.Policy{Policy: &rode.PolicyEntity{Name: expectedPolicyName}}, nil)
+			})
+
+			It("should deny the request with a message", func() {
+				Expect(actualResponse.Allowed).To(BeFalse())
+				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`failed the Rode policy "%s"`, expectedPolicyName)))
+			})
+
+			It("should not return an error", func() {
+				Expect(actualError).NotTo(HaveOccurred())
+			})
+		})
+
+		When("the container image fails policy and retrieving the policy name fails", func() {
+
 			BeforeEach(func() {
 				mockRode.EXPECT().
 					EvaluatePolicy(gomock.Any(), gomock.Any()).
 					Return(&rode.EvaluatePolicyResponse{Pass: false}, nil)
+
+				mockRode.EXPECT().
+					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
+					Return(nil, errors.New(fake.Word()))
 			})
 
-			It("should deny the request", func() {
+			It("should deny the request with a message", func() {
 				Expect(actualResponse.Allowed).To(BeFalse())
+				Expect(actualResponse.Result.Message).To(ContainSubstring("failed the Rode policy"))
 			})
 
 			It("should not return an error", func() {
@@ -210,14 +243,17 @@ var _ = Describe("Enforcer", func() {
 		})
 
 		When("an error occurs calling Rode", func() {
+			var expectedError string
 			BeforeEach(func() {
+				expectedError = fake.Word()
 				mockRode.EXPECT().
 					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					Return(nil, errors.New(fake.Word()))
+					Return(nil, errors.New(expectedError))
 			})
 
-			It("should deny the response", func() {
+			It("should deny the response with a message", func() {
 				Expect(actualResponse.Allowed).To(BeFalse())
+				Expect(actualResponse.Result.Message).To(ContainSubstring(expectedError))
 			})
 
 			It("should not return an error", func() {
