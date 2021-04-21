@@ -160,7 +160,7 @@ func (e *Enforcer) getPolicyName(log *zap.Logger) string {
 }
 
 func handleError(log *zap.Logger, response *v1.AdmissionResponse, message string, err error) {
-	log.Error("message", zap.Error(err))
+	log.Error(message, zap.Error(err))
 
 	response.Result = &metav1.Status{
 		Message: fmt.Sprintf("%s: %s", message, err),
