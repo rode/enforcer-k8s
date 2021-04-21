@@ -151,6 +151,40 @@ var _ = Describe("Enforcer", func() {
 			})
 		})
 
+		Describe("the image is in the default registry (Docker Hub)", func() {
+			var actualRequest *rode.EvaluatePolicyRequest
+
+			BeforeEach(func() {
+				mockRode.EXPECT().
+					EvaluatePolicy(gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ context.Context, request *rode.EvaluatePolicyRequest) (*rode.EvaluatePolicyResponse, error) {
+						actualRequest = request
+
+						return &rode.EvaluatePolicyResponse{Pass: true}, nil
+					})
+			})
+
+			When("the image has a namespace", func() {
+				BeforeEach(func() {
+					admissionReview.Request.Object.Raw = createPodBody("foo/bar:latest")
+				})
+
+				It("should not include the default registry in the resource uri", func() {
+					Expect(actualRequest.ResourceUri).To(Equal("foo/bar@sha256:" + expectedDigest))
+				})
+			})
+
+			When("the image does not have a namespace", func() {
+				BeforeEach(func() {
+					admissionReview.Request.Object.Raw = createPodBody("bar:latest")
+				})
+
+				It("should not include the default registry or the default namespace in the resource uri", func() {
+					Expect(actualRequest.ResourceUri).To(Equal("bar@sha256:" + expectedDigest))
+				})
+			})
+		})
+
 		When("the image name cannot be parsed", func() {
 			BeforeEach(func() {
 				admissionReview.Request.Object.Raw = createPodBody("invalid@foo")

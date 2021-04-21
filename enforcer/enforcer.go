@@ -20,8 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	registryv1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -56,6 +58,10 @@ var (
 	insecureTransport   = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
+)
+
+const (
+	defaultNamespace = "library"
 )
 
 func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
@@ -118,7 +124,7 @@ func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionRespons
 		return false
 	}
 
-	imageResourceUri := ref.Context().Digest(digest.String()).String()
+	imageResourceUri := createResourceUri(ref, digest)
 
 	log.Debug("evaluating policy against image", zap.String("resourceUri", imageResourceUri))
 
@@ -165,4 +171,11 @@ func handleError(log *zap.Logger, response *v1.AdmissionResponse, message string
 	response.Result = &metav1.Status{
 		Message: fmt.Sprintf("%s: %s", message, err),
 	}
+}
+
+func createResourceUri(ref name.Reference, digest registryv1.Hash) string {
+	image := ref.Context().Digest(digest.String()).String()
+	image = strings.TrimPrefix(image, name.DefaultRegistry+"/")
+
+	return strings.TrimPrefix(image, defaultNamespace+"/")
 }
