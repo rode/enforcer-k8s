@@ -24,13 +24,14 @@ import (
 )
 
 type Config struct {
-	Debug      bool
-	PolicyId   string
-	Tls        *TlsConfig
-	Kubernetes *KubernetesConfig
-	Rode       *RodeConfig
-	Port       int
-	Namespace  string
+	Debug                      bool
+	RegistryInsecureSkipVerify bool
+	Kubernetes                 *KubernetesConfig
+	Namespace                  string
+	PolicyId                   string
+	Port                       int
+	Rode                       *RodeConfig
+	Tls                        *TlsConfig
 }
 
 type RodeConfig struct {
@@ -62,6 +63,7 @@ func Build(name string, args []string) (*Config, error) {
 	flags.StringVar(&conf.Tls.Secret, "tls-secret", "", "the namespaced name of the TLS secret containing the certificate / private key for the webhook TLS configuration. should be in the format ${namespace}/${name}")
 	flags.StringVar(&conf.Rode.Host, "rode-host", "", "rode host")
 	flags.BoolVar(&conf.Rode.Insecure, "rode-insecure", false, "when set, the connection to rode will not use TLS")
+	flags.BoolVar(&conf.RegistryInsecureSkipVerify, "registry-insecure-skip-verify", false, "when set, TLS connections to container registries will be insecure")
 	flags.BoolVar(&conf.Debug, "debug", false, "when set, debug mode will be enabled")
 	flags.IntVar(&conf.Port, "port", 8001, "the port to bind")
 

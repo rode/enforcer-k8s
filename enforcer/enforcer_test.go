@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -102,7 +103,7 @@ var _ = Describe("Enforcer", func() {
 			actualResponse, actualError = enforcer.Enforce(admissionReview)
 		})
 
-		When("a pod has a single container that passes policy", func() {
+		Describe("successful policy evaluation", func() {
 			BeforeEach(func() {
 				expectedRequest := &rode.EvaluatePolicyRequest{
 					Policy:      policyId,
@@ -113,16 +114,38 @@ var _ = Describe("Enforcer", func() {
 					Return(&rode.EvaluatePolicyResponse{Pass: true}, nil)
 			})
 
-			It("should allow the request", func() {
-				Expect(actualResponse.Allowed).To(BeTrue())
+			When("a pod has a single container that passes policy", func() {
+				It("should allow the request", func() {
+					Expect(actualResponse.Allowed).To(BeTrue())
+				})
+
+				It("should include the request UID in the response", func() {
+					Expect(actualResponse.UID).To(Equal(expectedUid))
+				})
+
+				It("should not return an error", func() {
+					Expect(actualError).To(BeNil())
+				})
 			})
 
-			It("should include the request UID in the response", func() {
-				Expect(actualResponse.UID).To(Equal(expectedUid))
-			})
+			When("the enforcer is configured not to verify TLS certificates against container registries", func() {
+				var actualTransport *http.Transport
 
-			It("should not return an error", func() {
-				Expect(actualError).To(BeNil())
+				BeforeEach(func() {
+					conf.RegistryInsecureSkipVerify = true
+					remoteWithTransport = func(t http.RoundTripper) remote.Option {
+						if transport, ok := t.(*http.Transport); ok {
+							actualTransport = transport
+						}
+
+						return remote.WithTransport(t)
+					}
+				})
+
+				It("should pass an insecure http.Transport", func() {
+					Expect(actualTransport).NotTo(BeNil())
+					Expect(actualTransport.TLSClientConfig.InsecureSkipVerify).To(BeTrue())
+				})
 			})
 		})
 

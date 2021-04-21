@@ -49,7 +49,11 @@ func NewEnforcer(
 }
 
 var (
-	getImageManifest = remote.Image
+	getImageManifest    = remote.Image
+	remoteWithTransport = remote.WithTransport
+	insecureTransport   = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 )
 
 func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
@@ -72,8 +76,9 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 		return response, nil
 	}
 
-	insecure := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	var remoteOptions []remote.Option
+	if e.config.RegistryInsecureSkipVerify {
+		remoteOptions = append(remoteOptions, remoteWithTransport(insecureTransport))
 	}
 
 	for _, container := range pod.Spec.Containers {
@@ -83,7 +88,7 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 			return response, nil
 		}
 
-		img, err := getImageManifest(ref, remote.WithTransport(insecure))
+		img, err := getImageManifest(ref, remoteOptions...)
 		if err != nil {
 			log.Error("error fetching image", zap.Error(err), zap.String("image", container.Image))
 			return response, nil
