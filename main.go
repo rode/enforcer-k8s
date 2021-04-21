@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -43,53 +44,53 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func webhook(log *zap.Logger, k8sEnforcer *enforcer.Enforcer) func(w http.ResponseWriter, r *http.Request) {
+func webhook(logger *zap.Logger, k8sEnforcer *enforcer.Enforcer) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info("request received")
+		logger.Info("request received")
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Error("Error reading response body", zap.Error(err))
+			logger.Error("Error reading response body", zap.Error(err))
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" {
-			log.Error("Unexpected content type", zap.String("contentType", contentType))
+			logger.Error("Unexpected content type", zap.String("contentType", contentType))
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		admissionReview := &v1.AdmissionReview{}
 		if err := json.Unmarshal(body, admissionReview); err != nil {
-			log.Error("Unable to deserialize request body: %s", zap.Error(err))
+			logger.Error("Unable to deserialize request body: %s", zap.Error(err))
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		response, err := k8sEnforcer.Enforce(admissionReview)
 		if err != nil {
-			log.Error("error building admission response", zap.Error(err))
+			logger.Error("error building admission response", zap.Error(err))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		admissionReview.Response = response
 
-		log.Info("raw response", zap.Any("response", admissionReview.Response))
+		logger.Info("raw response", zap.Any("response", admissionReview.Response))
 		responseBytes, err := json.Marshal(admissionReview)
 		if err != nil {
-			log.Error("error serializing response", zap.Error(err))
+			logger.Error("error serializing response", zap.Error(err))
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := w.Write(responseBytes); err != nil {
-			log.Error("error writing response", zap.Error(err))
+			logger.Error("error writing response", zap.Error(err))
 			return
 		}
 
-		log.Info("successful request")
+		logger.Info("successful request")
 	}
 }
 
@@ -97,7 +98,7 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func newK8sClient(log *zap.Logger, kubernetesConfig *config.KubernetesConfig) *kubernetes.Clientset {
+func newK8sClient(logger *zap.Logger, kubernetesConfig *config.KubernetesConfig) *kubernetes.Clientset {
 	var (
 		clusterConfig *rest.Config
 		err           error
@@ -106,7 +107,7 @@ func newK8sClient(log *zap.Logger, kubernetesConfig *config.KubernetesConfig) *k
 	if kubernetesConfig.InCluster {
 		clusterConfig, err = rest.InClusterConfig()
 		if err != nil {
-			log.Fatal("Failed to get cluster config", zap.Error(err))
+			logger.Fatal("Failed to get cluster config", zap.Error(err))
 		}
 	} else {
 		clusterConfig, err = clientcmd.BuildConfigFromFlags("", kubernetesConfig.ConfigFile)
@@ -114,13 +115,13 @@ func newK8sClient(log *zap.Logger, kubernetesConfig *config.KubernetesConfig) *k
 
 	client, err := kubernetes.NewForConfig(clusterConfig)
 	if err != nil {
-		log.Fatal("Error creating kubernetes client", zap.Error(err))
+		logger.Fatal("Error creating kubernetes client", zap.Error(err))
 	}
 
 	return client
 }
 
-func newRodeClient(log *zap.Logger, conf *config.Config) (*grpc.ClientConn, rode.RodeClient) {
+func newRodeClient(logger *zap.Logger, conf *config.Config) (*grpc.ClientConn, rode.RodeClient) {
 	dialOptions := []grpc.DialOption{
 		grpc.WithBlock(),
 	}
@@ -134,31 +135,31 @@ func newRodeClient(log *zap.Logger, conf *config.Config) (*grpc.ClientConn, rode
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, conf.Rode.Host, dialOptions...)
 	if err != nil {
-		log.Fatal("failed to establish grpc connection to Rode", zap.Error(err))
+		logger.Fatal("failed to establish grpc connection to Rode", zap.Error(err))
 	}
 
 	return conn, rode.NewRodeClient(conn)
 }
 
-func createTlsConfig(log *zap.Logger, conf *config.Config, client *kubernetes.Clientset) *tls.Config {
+func createTlsConfig(logger *zap.Logger, conf *config.Config, client *kubernetes.Clientset) *tls.Config {
 	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
 	if err != nil {
-		log.Fatal("Failed to find secret", zap.Error(err), zap.String("secret", conf.Tls.Secret))
+		logger.Fatal("Failed to find secret", zap.Error(err), zap.String("secret", conf.Tls.Secret))
 	}
 
 	cert, ok := secret.Data["tls.crt"]
 	if !ok {
-		log.Fatal("Secret missing tls.crt", zap.String("secret", conf.Tls.Secret))
+		logger.Fatal("Secret missing tls.crt", zap.String("secret", conf.Tls.Secret))
 	}
 
 	key, ok := secret.Data["tls.key"]
 	if !ok {
-		log.Fatal("Secret missing tls.key", zap.String("secret", conf.Tls.Secret))
+		logger.Fatal("Secret missing tls.key", zap.String("secret", conf.Tls.Secret))
 	}
 
 	certificate, err := tls.X509KeyPair(cert, key)
 	if err != nil {
-		log.Fatal("Error loading key pair", zap.Error(err))
+		logger.Fatal("Error loading key pair", zap.Error(err))
 	}
 
 	return &tls.Config{
@@ -166,46 +167,57 @@ func createTlsConfig(log *zap.Logger, conf *config.Config, client *kubernetes.Cl
 	}
 }
 
-func main() {
-	log, _ := zap.NewDevelopment()
-
-	conf, err := config.Build(os.Args[0], os.Args[1:])
-	if err != nil {
-		log.Fatal("failed to build config", zap.Error(err))
+func createLogger(debug bool) (*zap.Logger, error) {
+	if debug {
+		return zap.NewDevelopment()
 	}
 
-	client := newK8sClient(log, conf.Kubernetes)
+	return zap.NewProduction()
+}
 
-	conn, rodeClient := newRodeClient(log, conf)
+func main() {
+	conf, err := config.Build(os.Args[0], os.Args[1:])
+	if err != nil {
+		log.Fatalf("failed to build config: %s", err)
+	}
+
+	logger, err := createLogger(conf.Debug)
+	if err != nil {
+		log.Fatalf("failed to create logger:: %s", err)
+	}
+
+	client := newK8sClient(logger, conf.Kubernetes)
+
+	conn, rodeClient := newRodeClient(logger, conf)
 	defer conn.Close()
 
 	k8sEnforcer := enforcer.NewEnforcer(
-		log.Named("Enforcer"),
+		logger.Named("Enforcer"),
 		conf,
 		rodeClient,
 	)
 
-	http.HandleFunc("/", webhook(log, k8sEnforcer))
+	http.HandleFunc("/", webhook(logger, k8sEnforcer))
 	http.HandleFunc("/healthz", healthz)
 
 	server := &http.Server{
 		Addr:      fmt.Sprintf(":%d", conf.Port),
-		TLSConfig: createTlsConfig(log, conf, client),
+		TLSConfig: createTlsConfig(logger, conf, client),
 	}
 
 	go func() {
 		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal("error starting server", zap.Error(err))
+			logger.Fatal("error starting server", zap.Error(err))
 		}
 	}()
 
-	log.Info("listening", zap.Int("port", conf.Port))
+	logger.Info("listening", zap.Int("port", conf.Port))
 
 	s := make(chan os.Signal, 1)
 	signal.Notify(s, syscall.SIGINT, syscall.SIGTERM)
 
 	<-s
 
-	log.Info("Shutting down...")
+	logger.Info("Shutting down...")
 	server.Shutdown(context.Background())
 }

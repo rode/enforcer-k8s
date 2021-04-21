@@ -24,6 +24,7 @@ import (
 )
 
 type Config struct {
+	Debug      bool
 	PolicyId   string
 	Tls        *TlsConfig
 	Kubernetes *KubernetesConfig
@@ -61,6 +62,7 @@ func Build(name string, args []string) (*Config, error) {
 	flags.StringVar(&conf.Tls.Secret, "tls-secret", "", "the namespaced name of the TLS secret containing the certificate / private key for the webhook TLS configuration. should be in the format ${namespace}/${name}")
 	flags.StringVar(&conf.Rode.Host, "rode-host", "", "rode host")
 	flags.BoolVar(&conf.Rode.Insecure, "rode-insecure", false, "when set, the connection to rode will not use TLS")
+	flags.BoolVar(&conf.Debug, "debug", false, "when set, debug mode will be enabled")
 	flags.IntVar(&conf.Port, "port", 8001, "the port to bind")
 
 	flags.BoolVar(&conf.Kubernetes.InCluster, "k8s-in-cluster", true, "when set, the enforcer will use the in-cluster k8s config")
