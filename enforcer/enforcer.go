@@ -18,10 +18,14 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	registryv1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/rode/enforcer-k8s/config"
 	rode "github.com/rode/rode/proto/v1alpha1"
@@ -49,7 +53,15 @@ func NewEnforcer(
 }
 
 var (
-	getImageManifest = remote.Image
+	getImageManifest    = remote.Image
+	remoteWithTransport = remote.WithTransport
+	insecureTransport   = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+)
+
+const (
+	defaultNamespace = "library"
 )
 
 func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
@@ -72,45 +84,12 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 		return response, nil
 	}
 
-	insecure := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	var allContainers []corev1.Container
+	allContainers = append(allContainers, pod.Spec.InitContainers...)
+	allContainers = append(allContainers, pod.Spec.Containers...)
 
-	for _, container := range pod.Spec.Containers {
-		ref, err := name.ParseReference(container.Image)
-		if err != nil {
-			log.Error("error parsing image reference", zap.Error(err), zap.String("image", container.Image))
-			return response, nil
-		}
-
-		img, err := getImageManifest(ref, remote.WithTransport(insecure))
-		if err != nil {
-			log.Error("error fetching image", zap.Error(err), zap.String("image", container.Image))
-			return response, nil
-		}
-
-		digest, err := img.Digest()
-		if err != nil {
-			log.Error("error calculating digest", zap.Error(err), zap.String("image", container.Image))
-			return response, nil
-		}
-
-		imageResourceUri := ref.Context().Digest(digest.String()).String()
-
-		log.Debug("evaluating policy against image", zap.String("image", imageResourceUri))
-
-		res, err := e.rode.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
-			Policy:      e.config.PolicyId,
-			ResourceUri: imageResourceUri,
-		})
-
-		if err != nil {
-			log.Error("error evaluating policy", zap.Error(err))
-			return response, nil
-		}
-
-		if !res.Pass {
-			log.Info("policy evaluation failed", zap.Any("result", res.Result))
+	for _, container := range allContainers {
+		if pass := e.evaluatePolicy(log, response, container.Image); !pass {
 			return response, nil
 		}
 	}
@@ -118,4 +97,85 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 	response.Allowed = true
 
 	return response, nil
+}
+
+func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionResponse, imageName string) bool {
+	log = log.With(zap.String("image", imageName))
+	ref, err := name.ParseReference(imageName)
+	if err != nil {
+		handleError(log, response, "error parsing image reference", err)
+		return false
+	}
+
+	var remoteOptions []remote.Option
+	if e.config.RegistryInsecureSkipVerify {
+		remoteOptions = append(remoteOptions, remoteWithTransport(insecureTransport))
+	}
+
+	img, err := getImageManifest(ref, remoteOptions...)
+	if err != nil {
+		handleError(log, response, "error fetching image manifest", err)
+		return false
+	}
+
+	digest, err := img.Digest()
+	if err != nil {
+		handleError(log, response, "error calculating digest", err)
+		return false
+	}
+
+	imageResourceUri := createResourceUri(ref, digest)
+
+	log.Debug("evaluating policy against image", zap.String("resourceUri", imageResourceUri))
+
+	res, err := e.rode.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
+		Policy:      e.config.PolicyId,
+		ResourceUri: imageResourceUri,
+	})
+
+	if err != nil {
+		handleError(log, response, "error evaluating policy", err)
+		return false
+	}
+
+	if res.Pass {
+		return true
+	}
+
+	log.Info("policy evaluation failed", zap.Any("result", res.Result))
+	policyName := e.getPolicyName(log)
+
+	response.Result = &metav1.Status{
+		Message: fmt.Sprintf(`container image "%s" failed the Rode policy "%s" (id: %s)`, ref.Name(), policyName, e.config.PolicyId),
+	}
+
+	return false
+}
+
+func (e *Enforcer) getPolicyName(log *zap.Logger) string {
+	policy, err := e.rode.GetPolicy(context.Background(), &rode.GetPolicyRequest{
+		Id: e.config.PolicyId,
+	})
+
+	if err != nil {
+		log.Error("failed to retrieve policy", zap.Error(err))
+		return ""
+	}
+
+	return policy.GetPolicy().Name
+}
+
+func handleError(log *zap.Logger, response *v1.AdmissionResponse, message string, err error) {
+	log.Error(message, zap.Error(err))
+
+	response.Result = &metav1.Status{
+		Message: fmt.Sprintf("%s: %s", message, err),
+	}
+}
+
+func createResourceUri(ref name.Reference, digest registryv1.Hash) string {
+	image := ref.Context().Digest(digest.String()).String()
+	image = strings.TrimPrefix(image, name.DefaultRegistry+"/")
+
+	return strings.TrimPrefix(image, defaultNamespace+"/")
 }

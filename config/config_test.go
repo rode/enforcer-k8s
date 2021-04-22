@@ -50,8 +50,10 @@ var _ = DescribeTable("config",
 				ConfigFile: filepath.Join(homedir.HomeDir(), ".kube", "config"),
 			},
 			PolicyId: "foo",
-			RodeHost: "localhost:50051",
-			Port:     8001,
+			Rode: &RodeConfig{
+				Host: "localhost:50051",
+			},
+			Port: 8001,
 		},
 	}),
 	Entry("missing policy ID", entry{

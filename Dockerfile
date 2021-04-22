@@ -14,6 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux GOA
 # ---------------
 
 FROM gcr.io/distroless/static:nonroot
+LABEL org.opencontainers.image.source=https://github.com/rode/enforcer-k8s
 
 WORKDIR /
 COPY --from=builder /workspace/enforcer-k8s .
