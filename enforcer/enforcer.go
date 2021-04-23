@@ -40,14 +40,14 @@ import (
 type Enforcer struct {
 	config *config.Config
 	logger *zap.Logger
-	k8s    *kubernetes.Clientset
+	k8s    kubernetes.Interface
 	rode   rode.RodeClient
 }
 
 func NewEnforcer(
 	logger *zap.Logger,
 	config *config.Config,
-	k8s *kubernetes.Clientset,
+	k8s kubernetes.Interface,
 	rode rode.RodeClient,
 ) *Enforcer {
 	return &Enforcer{
@@ -61,6 +61,7 @@ func NewEnforcer(
 var (
 	getImageManifest    = remote.Image
 	remoteWithTransport = remote.WithTransport
+	remoteWithAuth      = remote.WithAuth
 	insecureTransport   = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -75,8 +76,6 @@ const (
 type registryCredentials struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
-	Email    string `json:"email"`
-	Auth     string `json:"auth"`
 }
 
 type imagePullSecret struct {
@@ -174,7 +173,7 @@ func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionRespons
 	for _, c := range pullSecrets {
 		if s, ok := c.Authentication[ref.Context().RegistryStr()]; ok {
 			log.Debug("adding credentials to manifest request")
-			remoteOptions = append(remoteOptions, remote.WithAuth(&authn.Basic{
+			remoteOptions = append(remoteOptions, remoteWithAuth(&authn.Basic{
 				Username: s.Username,
 				Password: s.Password,
 			}))
@@ -255,7 +254,7 @@ func rewriteAuthKeys(originalSecret *imagePullSecret) (*imagePullSecret, error) 
 	}
 
 	for k, v := range originalSecret.Authentication {
-		u, err := url.Parse(k)
+		u, err := url.ParseRequestURI(k)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing registry url: %s", err)
 		}

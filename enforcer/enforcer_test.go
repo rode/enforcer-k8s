@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	registryv1 "github.com/google/go-containerregistry/pkg/v1"
 	registryfake "github.com/google/go-containerregistry/pkg/v1/fake"
@@ -36,16 +37,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 var _ = Describe("Enforcer", func() {
 	var (
-		policyId string
-		ctx      context.Context
-		conf     *config.Config
-		enforcer *Enforcer
-		mockRode *mocks.MockRodeClient
-		mockCtrl *gomock.Controller
+		policyId      string
+		ctx           context.Context
+		conf          *config.Config
+		enforcer      *Enforcer
+		mockRode      *mocks.MockRodeClient
+		mockK8sClient = k8sfake.NewSimpleClientset()
+		mockCtrl      *gomock.Controller
 	)
 
 	BeforeEach(func() {
@@ -57,7 +60,7 @@ var _ = Describe("Enforcer", func() {
 		enforcer = NewEnforcer(
 			logger,
 			conf,
-			nil,
+			mockK8sClient,
 			mockRode,
 		)
 		ctx = context.Background()
@@ -99,7 +102,7 @@ var _ = Describe("Enforcer", func() {
 				},
 			}
 
-			admissionReview.Request.Object.Raw = createPodBody("harbor.localhost/rode-demo/nginx:latest")
+			admissionReview.Request.Object.Raw = jsonEncode(createPod("harbor.localhost/rode-demo/nginx:latest"))
 		})
 
 		JustBeforeEach(func() {
@@ -167,7 +170,7 @@ var _ = Describe("Enforcer", func() {
 
 			When("the image has a namespace", func() {
 				BeforeEach(func() {
-					admissionReview.Request.Object.Raw = createPodBody("foo/bar:latest")
+					admissionReview.Request.Object.Raw = jsonEncode(createPod("foo/bar:latest"))
 				})
 
 				It("should not include the default registry in the resource uri", func() {
@@ -177,7 +180,7 @@ var _ = Describe("Enforcer", func() {
 
 			When("the image does not have a namespace", func() {
 				BeforeEach(func() {
-					admissionReview.Request.Object.Raw = createPodBody("bar:latest")
+					admissionReview.Request.Object.Raw = jsonEncode(createPod("bar:latest"))
 				})
 
 				It("should not include the default registry or the default namespace in the resource uri", func() {
@@ -186,9 +189,199 @@ var _ = Describe("Enforcer", func() {
 			})
 		})
 
+		Describe("pod spec includes image secrets", func() {
+			var (
+				namespace           string
+				pullSecret          *corev1.Secret
+				expectedCredentials *registryCredentials
+				actualAuth          authn.Authenticator
+			)
+
+			BeforeEach(func() {
+				namespace = fake.Word()
+				secretName := fake.Word()
+				expectedCredentials = &registryCredentials{
+					Username: fake.Username(),
+					Password: fake.UUID(),
+				}
+
+				pullSecret = &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: namespace,
+						Name:      secretName,
+					},
+					Data: map[string][]byte{
+						".dockerconfigjson": jsonEncode(&imagePullSecret{
+							Authentication: map[string]*registryCredentials{
+								"https://harbor.localhost": expectedCredentials,
+							},
+						}),
+					},
+					Type: "kubernetes.io/dockerconfigjson",
+				}
+
+				mockRode.EXPECT().
+					EvaluatePolicy(gomock.Any(), gomock.Any()).
+					Return(&rode.EvaluatePolicyResponse{Pass: true}, nil).
+					AnyTimes()
+
+				pod := createPod("harbor.localhost/rode-demo/nginx:latest")
+				pod.Namespace = namespace
+				pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: secretName}}
+
+				admissionReview.Request.Object.Raw = jsonEncode(pod)
+
+				remoteWithAuth = func(auth authn.Authenticator) remote.Option {
+					actualAuth = auth
+					return remote.WithAuth(auth)
+				}
+			})
+
+			AfterEach(func() {
+				actualAuth = nil
+			})
+
+			When("the registry server matches an auth key in the pull secret", func() {
+				BeforeEach(func() {
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should add the credentials to the manifest request", func() {
+					Expect(actualAuth).NotTo(BeNil())
+					config, err := actualAuth.Authorization()
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(config).NotTo(BeNil())
+					Expect(config.Username).To(Equal(expectedCredentials.Username))
+					Expect(config.Password).To(Equal(expectedCredentials.Password))
+				})
+
+				It("should allow the request", func() {
+					Expect(actualResponse.Allowed).To(BeTrue())
+				})
+
+				It("should not return an error", func() {
+					Expect(actualError).To(BeNil())
+				})
+			})
+
+			When("the image is from Docker Hub", func() {
+				BeforeEach(func() {
+					pod := createPod("nginx")
+					pod.Namespace = namespace
+					pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: pullSecret.Name}}
+					admissionReview.Request.Object.Raw = jsonEncode(pod)
+
+					pullSecret.Data = map[string][]byte{
+						".dockerconfigjson": jsonEncode(&imagePullSecret{
+							Authentication: map[string]*registryCredentials{
+								"https://index.docker.io/v1/": expectedCredentials,
+							},
+						}),
+					}
+
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should add the credentials to the manifest request", func() {
+					Expect(actualAuth).NotTo(BeNil())
+					config, err := actualAuth.Authorization()
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(config).NotTo(BeNil())
+					Expect(config.Username).To(Equal(expectedCredentials.Username))
+					Expect(config.Password).To(Equal(expectedCredentials.Password))
+				})
+			})
+
+			When("the registry server does not match the secret auth key", func() {
+				BeforeEach(func() {
+					pullSecret.Data = map[string][]byte{
+						".dockerconfigjson": jsonEncode(&imagePullSecret{
+							Authentication: map[string]*registryCredentials{
+								"https://grc.io": expectedCredentials,
+							},
+						}),
+					}
+
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should not add credentials to the request", func() {
+					Expect(actualAuth).To(BeNil())
+				})
+			})
+
+			When("the pull secret is not found", func() {
+				It("should deny the request", func() {
+					Expect(actualResponse.Allowed).To(BeFalse())
+					Expect(actualResponse.Result.Message).To(ContainSubstring("error fetching image pull secret"))
+				})
+			})
+
+			When("the image pull secret is not the correct type", func() {
+				BeforeEach(func() {
+					pullSecret.Type = corev1.SecretType(fake.Word())
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should deny the request", func() {
+					Expect(actualResponse.Allowed).To(BeFalse())
+					Expect(actualResponse.Result.Message).To(ContainSubstring("invalid secret type"))
+				})
+			})
+
+			When("the image pull secret is missing the credential data key", func() {
+				BeforeEach(func() {
+					pullSecret.Data = map[string][]byte{}
+
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should deny the request", func() {
+					Expect(actualResponse.Allowed).To(BeFalse())
+					Expect(actualResponse.Result.Message).To(ContainSubstring("missing key"))
+				})
+			})
+
+			When("the secret JSON is unparseable", func() {
+				BeforeEach(func() {
+					pullSecret.Data = map[string][]byte{
+						".dockerconfigjson": []byte("{"),
+					}
+
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should deny the request", func() {
+					Expect(actualResponse.Allowed).To(BeFalse())
+					Expect(actualResponse.Result.Message).To(ContainSubstring("error unmarshalling image pull secret"))
+				})
+			})
+
+			When("the auth key does not contain a valid hostname", func() {
+				BeforeEach(func() {
+					pullSecret.Data = map[string][]byte{
+						".dockerconfigjson": jsonEncode(&imagePullSecret{
+							Authentication: map[string]*registryCredentials{
+								"invalid": expectedCredentials,
+							},
+						}),
+					}
+
+					Expect(mockK8sClient.Tracker().Add(pullSecret)).NotTo(HaveOccurred())
+				})
+
+				It("should deny the request", func() {
+					Expect(actualResponse.Allowed).To(BeFalse())
+					Expect(actualResponse.Result.Message).To(ContainSubstring("error rewriting auth keys"))
+				})
+			})
+		})
+
 		When("the image name cannot be parsed", func() {
 			BeforeEach(func() {
-				admissionReview.Request.Object.Raw = createPodBody("invalid@foo")
+				admissionReview.Request.Object.Raw = jsonEncode(createPod("invalid@foo"))
 			})
 
 			It("should deny the request", func() {
@@ -284,25 +477,11 @@ var _ = Describe("Enforcer", func() {
 
 			BeforeEach(func() {
 				initContainerImage = "harbor.localhost/rode-demo/pause"
-				pod := corev1.Pod{
-					Spec: corev1.PodSpec{
-						InitContainers: []corev1.Container{
-							{
-								Image: initContainerImage,
-							},
-						},
-						Containers: []corev1.Container{
-							{
-								Image: "harbor.localhost/rode-demo/nginx:latest",
-							},
-						},
-					},
-				}
 
-				data, err := json.Marshal(pod)
-				Expect(err).NotTo(HaveOccurred())
+				pod := createPod("harbor.localhost/rode-demo/nginx:latest")
+				pod.Spec.InitContainers = []corev1.Container{{Image: initContainerImage}}
 
-				admissionReview.Request.Object.Raw = data
+				admissionReview.Request.Object.Raw = jsonEncode(pod)
 
 				mockRode.EXPECT().
 					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
@@ -375,8 +554,8 @@ var _ = Describe("Enforcer", func() {
 	})
 })
 
-func createPodBody(image string) []byte {
-	pod := &corev1.Pod{
+func createPod(image string) *corev1.Pod {
+	return &corev1.Pod{
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
@@ -385,8 +564,10 @@ func createPodBody(image string) []byte {
 			},
 		},
 	}
+}
 
-	data, err := json.Marshal(pod)
+func jsonEncode(val interface{}) []byte {
+	data, err := json.Marshal(val)
 	Expect(err).NotTo(HaveOccurred())
 
 	return data
