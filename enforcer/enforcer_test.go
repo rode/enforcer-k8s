@@ -57,6 +57,7 @@ var _ = Describe("Enforcer", func() {
 		enforcer = NewEnforcer(
 			logger,
 			conf,
+			nil,
 			mockRode,
 		)
 		ctx = context.Background()
