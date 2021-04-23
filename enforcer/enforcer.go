@@ -106,14 +106,14 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 	allContainers = append(allContainers, pod.Spec.InitContainers...)
 	allContainers = append(allContainers, pod.Spec.Containers...)
 
-	credentials, err := e.fetchImagePullSecrets(&pod)
+	pullSecrets, err := e.fetchImagePullSecrets(&pod)
 	if err != nil {
 		handleError(log, response, "error fetching image pull secrets", err)
 		return response, nil
 	}
 
 	for _, container := range allContainers {
-		if pass := e.evaluatePolicy(log, response, container.Image, credentials); !pass {
+		if pass := e.evaluatePolicy(log, response, container.Image, pullSecrets); !pass {
 			return response, nil
 		}
 	}
@@ -146,6 +146,8 @@ func (e *Enforcer) fetchImagePullSecrets(pod *corev1.Pod) ([]*imagePullSecret, e
 			return nil, fmt.Errorf("error unmarshalling image pull secret: %s", err)
 		}
 
+		// ensure that the auth keys are simply the hostname, to account for instances where a scheme or path is set
+		// for example, the Docker Hub auth key is "https://index.docker.io/v1/", but "index.docker.io" is the registry name from the image
 		secret, err = rewriteAuthKeys(secret)
 		if err != nil {
 			return nil, fmt.Errorf("error rewriting auth keys in secret: %s", err)
