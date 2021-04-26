@@ -194,6 +194,7 @@ func main() {
 	k8sEnforcer := enforcer.NewEnforcer(
 		logger.Named("Enforcer"),
 		conf,
+		client,
 		rodeClient,
 	)
 
