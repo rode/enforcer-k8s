@@ -11,7 +11,7 @@ deploy:
     releases:
       - name: enforcer-k8s
         chartPath: rode/enforcer-k8s
-        version: 0.1.0
+        version: 0.2.0
         remote: true
         wait: true
         artifactOverrides:
@@ -19,6 +19,9 @@ deploy:
         imageStrategy:
           helm: {}
         setValues:
+          debug: true
+          rode.insecure: true
+          registryInsecureSkipVerify: true
           policyId: your-policy-id-here
 profiles:
   - name: local
