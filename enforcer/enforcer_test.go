@@ -19,10 +19,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc"
 	"net/http"
 	"strings"
 
-	"github.com/golang/mock/gomock"
 	"github.com/google/go-containerregistry/pkg/name"
 	registryv1 "github.com/google/go-containerregistry/pkg/v1"
 	registryfake "github.com/google/go-containerregistry/pkg/v1/fake"
@@ -40,45 +40,47 @@ import (
 
 var _ = Describe("Enforcer", func() {
 	var (
-		policyId string
-		ctx      context.Context
-		conf     *config.Config
-		enforcer *Enforcer
-		mockRode *mocks.MockRodeClient
-		mockCtrl *gomock.Controller
+		expectedPolicyId string
+		conf             *config.Config
+		enforcer         *Enforcer
+		mockRode         *mocks.FakeRodeClient
 	)
 
 	BeforeEach(func() {
-		policyId = fake.UUID()
-		conf = &config.Config{PolicyId: policyId}
-		mockCtrl = gomock.NewController(GinkgoT())
-		mockRode = mocks.NewMockRodeClient(mockCtrl)
+		expectedPolicyId = fake.UUID()
+		conf = &config.Config{PolicyId: expectedPolicyId}
+		mockRode = &mocks.FakeRodeClient{}
 
 		enforcer = NewEnforcer(
 			logger,
 			conf,
 			mockRode,
 		)
-		ctx = context.Background()
-	})
-
-	AfterEach(func() {
-		mockCtrl.Finish()
 	})
 
 	Describe("Enforce", func() {
 		var (
-			expectedUid     types.UID
-			expectedImage   *registryfake.FakeImage
-			expectedDigest  string
-			admissionReview *v1.AdmissionReview
-			actualResponse  *v1.AdmissionResponse
-			actualError     error
+			actualResponse *v1.AdmissionResponse
+			actualError    error
+
+			expectedEvaluatePolicyResponse *rode.EvaluatePolicyResponse
+			expectedEvaluatePolicyError    error
+
+			expectedPolicyName     string
+			expectedPolicy         *rode.Policy
+			expectedGetPolicyError error
+
+			expectedUid         types.UID
+			expectedImage       *registryfake.FakeImage
+			expectedDigest      string
+			expectedResourceUri string
+			admissionReview     *v1.AdmissionReview
 		)
 
 		BeforeEach(func() {
 			expectedUid = types.UID(fake.UUID())
 			expectedDigest = fake.LetterN(10)
+			expectedResourceUri = "harbor.localhost/rode-demo/nginx@sha256:" + expectedDigest
 			expectedImage = &registryfake.FakeImage{}
 			expectedImage.DigestReturns(registryv1.Hash{
 				Algorithm: "sha256",
@@ -99,89 +101,90 @@ var _ = Describe("Enforcer", func() {
 			}
 
 			admissionReview.Request.Object.Raw = createPodBody("harbor.localhost/rode-demo/nginx:latest")
+
+			expectedEvaluatePolicyResponse = &rode.EvaluatePolicyResponse{
+				Pass: true,
+			}
+			expectedEvaluatePolicyError = nil
+
+			expectedPolicyName = fake.LetterN(10)
+			expectedPolicy = &rode.Policy{
+				Id: expectedPolicyId,
+				Policy: &rode.PolicyEntity{
+					Name: expectedPolicyName,
+				},
+			}
+			expectedGetPolicyError = nil
 		})
 
 		JustBeforeEach(func() {
+			if mockRode.EvaluatePolicyStub == nil {
+				mockRode.EvaluatePolicyReturns(expectedEvaluatePolicyResponse, expectedEvaluatePolicyError)
+			}
+
+			mockRode.GetPolicyReturns(expectedPolicy, expectedGetPolicyError)
+
 			actualResponse, actualError = enforcer.Enforce(admissionReview)
 		})
 
-		Describe("successful policy evaluation", func() {
+		It("should evaluate the policy in rode", func() {
+			Expect(mockRode.EvaluatePolicyCallCount()).To(Equal(1))
+
+			_, evaluatePolicyRequest, _ := mockRode.EvaluatePolicyArgsForCall(0)
+
+			Expect(evaluatePolicyRequest.Policy).To(Equal(expectedPolicyId))
+			Expect(evaluatePolicyRequest.ResourceUri).To(Equal(expectedResourceUri))
+		})
+
+		It("should allow the request", func() {
+			Expect(actualResponse.Allowed).To(BeTrue())
+			Expect(actualResponse.UID).To(Equal(expectedUid))
+			Expect(actualError).To(BeNil())
+		})
+
+		When("the enforcer is configured not to verify TLS certificates against container registries", func() {
+			var actualTransport *http.Transport
+
 			BeforeEach(func() {
-				expectedRequest := &rode.EvaluatePolicyRequest{
-					Policy:      policyId,
-					ResourceUri: "harbor.localhost/rode-demo/nginx@sha256:" + expectedDigest,
-				}
-				mockRode.EXPECT().
-					EvaluatePolicy(ctx, expectedRequest).Times(1).
-					Return(&rode.EvaluatePolicyResponse{Pass: true}, nil)
-			})
-
-			When("a pod has a single container that passes policy", func() {
-				It("should allow the request", func() {
-					Expect(actualResponse.Allowed).To(BeTrue())
-				})
-
-				It("should include the request UID in the response", func() {
-					Expect(actualResponse.UID).To(Equal(expectedUid))
-				})
-
-				It("should not return an error", func() {
-					Expect(actualError).To(BeNil())
-				})
-			})
-
-			When("the enforcer is configured not to verify TLS certificates against container registries", func() {
-				var actualTransport *http.Transport
-
-				BeforeEach(func() {
-					conf.RegistryInsecureSkipVerify = true
-					remoteWithTransport = func(t http.RoundTripper) remote.Option {
-						if transport, ok := t.(*http.Transport); ok {
-							actualTransport = transport
-						}
-
-						return remote.WithTransport(t)
+				conf.RegistryInsecureSkipVerify = true
+				remoteWithTransport = func(t http.RoundTripper) remote.Option {
+					if transport, ok := t.(*http.Transport); ok {
+						actualTransport = transport
 					}
-				})
 
-				It("should pass an insecure http.Transport", func() {
-					Expect(actualTransport).NotTo(BeNil())
-					Expect(actualTransport.TLSClientConfig.InsecureSkipVerify).To(BeTrue())
-				})
+					return remote.WithTransport(t)
+				}
+			})
+
+			It("should pass an insecure http.Transport", func() {
+				Expect(actualTransport).NotTo(BeNil())
+				Expect(actualTransport.TLSClientConfig.InsecureSkipVerify).To(BeTrue())
 			})
 		})
 
-		Describe("the image is in the default registry (Docker Hub)", func() {
-			var actualRequest *rode.EvaluatePolicyRequest
-
+		When("the image has a namespace in the default registry", func() {
 			BeforeEach(func() {
-				mockRode.EXPECT().
-					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					DoAndReturn(func(_ context.Context, request *rode.EvaluatePolicyRequest) (*rode.EvaluatePolicyResponse, error) {
-						actualRequest = request
-
-						return &rode.EvaluatePolicyResponse{Pass: true}, nil
-					})
+				admissionReview.Request.Object.Raw = createPodBody("foo/bar:latest")
 			})
 
-			When("the image has a namespace", func() {
-				BeforeEach(func() {
-					admissionReview.Request.Object.Raw = createPodBody("foo/bar:latest")
-				})
+			It("should not include the default registry in the resource uri", func() {
+				Expect(mockRode.EvaluatePolicyCallCount()).To(Equal(1))
+				_, actualRequest, _ := mockRode.EvaluatePolicyArgsForCall(0)
 
-				It("should not include the default registry in the resource uri", func() {
-					Expect(actualRequest.ResourceUri).To(Equal("foo/bar@sha256:" + expectedDigest))
-				})
+				Expect(actualRequest.ResourceUri).To(Equal("foo/bar@sha256:" + expectedDigest))
+			})
+		})
+
+		When("the image does not have a namespace in the default registry", func() {
+			BeforeEach(func() {
+				admissionReview.Request.Object.Raw = createPodBody("bar:latest")
 			})
 
-			When("the image does not have a namespace", func() {
-				BeforeEach(func() {
-					admissionReview.Request.Object.Raw = createPodBody("bar:latest")
-				})
+			It("should not include the default registry or the default namespace in the resource uri", func() {
+				Expect(mockRode.EvaluatePolicyCallCount()).To(Equal(1))
+				_, actualRequest, _ := mockRode.EvaluatePolicyArgsForCall(0)
 
-				It("should not include the default registry or the default namespace in the resource uri", func() {
-					Expect(actualRequest.ResourceUri).To(Equal("bar@sha256:" + expectedDigest))
-				})
+				Expect(actualRequest.ResourceUri).To(Equal("bar@sha256:" + expectedDigest))
 			})
 		})
 
@@ -213,6 +216,11 @@ var _ = Describe("Enforcer", func() {
 			It("should not return an error", func() {
 				Expect(actualError).NotTo(HaveOccurred())
 			})
+
+			It("should not make any requests to rode", func() {
+				Expect(mockRode.EvaluatePolicyCallCount()).To(BeZero())
+				Expect(mockRode.GetPolicyCallCount()).To(BeZero())
+			})
 		})
 
 		When("an error occurs calculating the image digest", func() {
@@ -227,22 +235,20 @@ var _ = Describe("Enforcer", func() {
 			It("should not return an error", func() {
 				Expect(actualError).NotTo(HaveOccurred())
 			})
+
+			It("should not make any requests to rode", func() {
+				Expect(mockRode.EvaluatePolicyCallCount()).To(BeZero())
+				Expect(mockRode.GetPolicyCallCount()).To(BeZero())
+			})
 		})
 
 		When("the container image fails policy", func() {
-			var (
-				expectedPolicyName string
-			)
-
 			BeforeEach(func() {
-				expectedPolicyName = fake.Word()
-				mockRode.EXPECT().
-					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					Return(&rode.EvaluatePolicyResponse{Pass: false}, nil)
+				expectedEvaluatePolicyResponse.Pass = false
+			})
 
-				mockRode.EXPECT().
-					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
-					Return(&rode.Policy{Policy: &rode.PolicyEntity{Name: expectedPolicyName}}, nil)
+			It("should fetch the policy details from rode", func() {
+				Expect(mockRode.GetPolicyCallCount()).To(Equal(1))
 			})
 
 			It("should deny the request with a message", func() {
@@ -257,13 +263,8 @@ var _ = Describe("Enforcer", func() {
 
 		When("the container image fails policy and retrieving the policy name fails", func() {
 			BeforeEach(func() {
-				mockRode.EXPECT().
-					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					Return(&rode.EvaluatePolicyResponse{Pass: false}, nil)
-
-				mockRode.EXPECT().
-					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
-					Return(nil, errors.New(fake.Word()))
+				expectedEvaluatePolicyResponse.Pass = false
+				expectedGetPolicyError = errors.New("failed getting policy")
 			})
 
 			It("should deny the request with a message", func() {
@@ -303,19 +304,11 @@ var _ = Describe("Enforcer", func() {
 
 				admissionReview.Request.Object.Raw = data
 
-				mockRode.EXPECT().
-					GetPolicy(ctx, &rode.GetPolicyRequest{Id: policyId}).
-					Return(&rode.Policy{Policy: &rode.PolicyEntity{Name: fake.Word()}}, nil)
-
-				mockRode.
-					EXPECT().
-					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					DoAndReturn(func(_ context.Context, r *rode.EvaluatePolicyRequest) (*rode.EvaluatePolicyResponse, error) {
-						return &rode.EvaluatePolicyResponse{
-							Pass: !strings.Contains(r.ResourceUri, initContainerImage),
-						}, nil
-					}).
-					AnyTimes()
+				mockRode.EvaluatePolicyStub = func(ctx context.Context, request *rode.EvaluatePolicyRequest, option ...grpc.CallOption) (*rode.EvaluatePolicyResponse, error) {
+					return &rode.EvaluatePolicyResponse{
+						Pass: !strings.Contains(request.ResourceUri, initContainerImage),
+					}, nil
+				}
 			})
 
 			It("should deny the request", func() {
@@ -325,17 +318,13 @@ var _ = Describe("Enforcer", func() {
 		})
 
 		When("an error occurs calling Rode", func() {
-			var expectedError string
 			BeforeEach(func() {
-				expectedError = fake.Word()
-				mockRode.EXPECT().
-					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					Return(nil, errors.New(expectedError))
+				expectedEvaluatePolicyError = errors.New("error evaluating policy")
 			})
 
 			It("should deny the response with a message", func() {
 				Expect(actualResponse.Allowed).To(BeFalse())
-				Expect(actualResponse.Result.Message).To(ContainSubstring(expectedError))
+				Expect(actualResponse.Result.Message).To(ContainSubstring(expectedEvaluatePolicyError.Error()))
 			})
 
 			It("should not return an error", func() {
@@ -346,7 +335,6 @@ var _ = Describe("Enforcer", func() {
 		When("the object is not a pod", func() {
 			BeforeEach(func() {
 				admissionReview.Request.Kind.Kind = fake.Word()
-				mockRode.EXPECT().EvaluatePolicy(gomock.Any(), gomock.Any()).Times(0)
 			})
 
 			It("should allow the request", func() {
@@ -355,6 +343,11 @@ var _ = Describe("Enforcer", func() {
 
 			It("should not return an error", func() {
 				Expect(actualError).NotTo(HaveOccurred())
+			})
+
+			It("should not make any requests to rode", func() {
+				Expect(mockRode.EvaluatePolicyCallCount()).To(BeZero())
+				Expect(mockRode.GetPolicyCallCount()).To(BeZero())
 			})
 		})
 

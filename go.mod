@@ -4,7 +4,6 @@ go 1.16
 
 require (
 	github.com/brianvoe/gofakeit/v6 v6.4.0
-	github.com/golang/mock v1.5.0
 	github.com/google/go-containerregistry v0.4.1
 	github.com/onsi/ginkgo v1.14.2
 	github.com/onsi/gomega v1.11.0
