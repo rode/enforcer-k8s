@@ -232,7 +232,7 @@ func (e *Enforcer) getPolicyName(log *zap.Logger) string {
 		return ""
 	}
 
-	return policy.GetPolicy().Name
+	return policy.Name
 }
 
 func handleError(log *zap.Logger, response *v1.AdmissionResponse, message string, err error) {

@@ -113,10 +113,8 @@ var _ = Describe("Enforcer", func() {
 
 			expectedPolicyName = fake.LetterN(10)
 			expectedPolicy = &rode.Policy{
-				Id: expectedPolicyId,
-				Policy: &rode.PolicyEntity{
-					Name: expectedPolicyName,
-				},
+				Id:   expectedPolicyId,
+				Name: expectedPolicyName,
 			}
 			expectedGetPolicyError = nil
 		})
