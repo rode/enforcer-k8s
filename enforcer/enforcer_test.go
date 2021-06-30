@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/golang/mock/gomock"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	registryv1 "github.com/google/go-containerregistry/pkg/v1"
@@ -47,7 +46,7 @@ var _ = Describe("Enforcer", func() {
 		conf             *config.Config
 		enforcer         *Enforcer
 		mockRode         *mocks.FakeRodeClient
-		mockK8sClient = k8sfake.NewSimpleClientset()
+		mockK8sClient    = k8sfake.NewSimpleClientset()
 	)
 
 	BeforeEach(func() {
@@ -223,11 +222,6 @@ var _ = Describe("Enforcer", func() {
 					},
 					Type: "kubernetes.io/dockerconfigjson",
 				}
-
-				mockRode.EXPECT().
-					EvaluatePolicy(gomock.Any(), gomock.Any()).
-					Return(&rode.EvaluatePolicyResponse{Pass: true}, nil).
-					AnyTimes()
 
 				pod := createPod("harbor.localhost/rode-demo/nginx:latest")
 				pod.Namespace = namespace
