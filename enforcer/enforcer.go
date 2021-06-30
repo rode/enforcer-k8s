@@ -20,12 +20,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	registryv1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/rode/enforcer-k8s/config"
 	rode "github.com/rode/rode/proto/v1alpha1"
@@ -37,17 +40,20 @@ import (
 type Enforcer struct {
 	config *config.Config
 	logger *zap.Logger
+	k8s    kubernetes.Interface
 	rode   rode.RodeClient
 }
 
 func NewEnforcer(
 	logger *zap.Logger,
 	config *config.Config,
+	k8s kubernetes.Interface,
 	rode rode.RodeClient,
 ) *Enforcer {
 	return &Enforcer{
 		config,
 		logger,
+		k8s,
 		rode,
 	}
 }
@@ -55,14 +61,26 @@ func NewEnforcer(
 var (
 	getImageManifest    = remote.Image
 	remoteWithTransport = remote.WithTransport
+	remoteWithAuth      = remote.WithAuth
 	insecureTransport   = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 )
 
 const (
-	defaultNamespace = "library"
+	defaultNamespace             = "library"
+	registryCredentialSecretType = "kubernetes.io/dockerconfigjson"
+	registryCredentialDataKey    = ".dockerconfigjson"
 )
+
+type registryCredentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type imagePullSecret struct {
+	Authentication map[string]*registryCredentials `json:"auths"`
+}
 
 func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionResponse, error) {
 	log := e.logger.Named("Enforce")
@@ -80,7 +98,7 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 
 	var pod corev1.Pod
 	if err := json.Unmarshal(admissionReview.Request.Object.Raw, &pod); err != nil {
-		log.Error("error unmarshalling pod", zap.Error(err))
+		handleError(log, response, "error unmarshalling pod", err)
 		return response, nil
 	}
 
@@ -88,8 +106,14 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 	allContainers = append(allContainers, pod.Spec.InitContainers...)
 	allContainers = append(allContainers, pod.Spec.Containers...)
 
+	pullSecrets, err := e.fetchImagePullSecrets(&pod)
+	if err != nil {
+		handleError(log, response, "error fetching image pull secrets", err)
+		return response, nil
+	}
+
 	for _, container := range allContainers {
-		if pass := e.evaluatePolicy(log, response, container.Image); !pass {
+		if pass := e.evaluatePolicy(log, response, container.Image, pullSecrets); !pass {
 			return response, nil
 		}
 	}
@@ -99,7 +123,43 @@ func (e *Enforcer) Enforce(admissionReview *v1.AdmissionReview) (*v1.AdmissionRe
 	return response, nil
 }
 
-func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionResponse, imageName string) bool {
+func (e *Enforcer) fetchImagePullSecrets(pod *corev1.Pod) ([]*imagePullSecret, error) {
+	var pullSecrets []*imagePullSecret
+
+	for _, pullSecret := range pod.Spec.ImagePullSecrets {
+		k8sSecret, err := e.k8s.CoreV1().Secrets(pod.Namespace).Get(context.Background(), pullSecret.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("error fetching image pull secret: %s", err)
+		}
+
+		if k8sSecret.Type != registryCredentialSecretType {
+			return nil, fmt.Errorf("invalid secret type for %s (expected %s, got %s)", pullSecret.Name, registryCredentialSecretType, k8sSecret.Type)
+		}
+
+		data, ok := k8sSecret.Data[registryCredentialDataKey]
+		if !ok {
+			return nil, fmt.Errorf("missing key %s in image pull secret %s", registryCredentialDataKey, pullSecret.Name)
+		}
+
+		secret := &imagePullSecret{}
+		if err := json.Unmarshal(data, secret); err != nil {
+			return nil, fmt.Errorf("error unmarshalling image pull secret: %s", err)
+		}
+
+		// ensure that the auth keys are simply the hostname, to account for instances where a scheme or path is set
+		// for example, the Docker Hub auth key is "https://index.docker.io/v1/", but "index.docker.io" is the registry name from the image
+		secret, err = rewriteAuthKeys(secret)
+		if err != nil {
+			return nil, fmt.Errorf("error rewriting auth keys in secret: %s", err)
+		}
+
+		pullSecrets = append(pullSecrets, secret)
+	}
+
+	return pullSecrets, nil
+}
+
+func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionResponse, imageName string, pullSecrets []*imagePullSecret) bool {
 	log = log.With(zap.String("image", imageName))
 	ref, err := name.ParseReference(imageName)
 	if err != nil {
@@ -110,6 +170,16 @@ func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionRespons
 	var remoteOptions []remote.Option
 	if e.config.RegistryInsecureSkipVerify {
 		remoteOptions = append(remoteOptions, remoteWithTransport(insecureTransport))
+	}
+
+	for _, c := range pullSecrets {
+		if s, ok := c.Authentication[ref.Context().RegistryStr()]; ok {
+			log.Debug("adding credentials to manifest request")
+			remoteOptions = append(remoteOptions, remoteWithAuth(&authn.Basic{
+				Username: s.Username,
+				Password: s.Password,
+			}))
+		}
 	}
 
 	img, err := getImageManifest(ref, remoteOptions...)
@@ -178,4 +248,22 @@ func createResourceUri(ref name.Reference, digest registryv1.Hash) string {
 	image = strings.TrimPrefix(image, name.DefaultRegistry+"/")
 
 	return strings.TrimPrefix(image, defaultNamespace+"/")
+}
+
+func rewriteAuthKeys(originalSecret *imagePullSecret) (*imagePullSecret, error) {
+	secretWithHostnameKey := &imagePullSecret{
+		Authentication: map[string]*registryCredentials{},
+	}
+
+	for k, v := range originalSecret.Authentication {
+		u, err := url.ParseRequestURI(k)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing registry url: %s", err)
+		}
+
+		value := v
+		secretWithHostnameKey.Authentication[u.Host] = value
+	}
+
+	return secretWithHostnameKey, nil
 }
