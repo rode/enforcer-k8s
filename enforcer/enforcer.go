@@ -160,7 +160,8 @@ func (e *Enforcer) fetchImagePullSecrets(pod *corev1.Pod) ([]*imagePullSecret, e
 }
 
 func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionResponse, imageName string, pullSecrets []*imagePullSecret) bool {
-	log = log.With(zap.String("image", imageName))
+	ctx := context.Background()
+	log = log.With(zap.String("image", imageName)).With(zap.String("policy group", e.config.PolicyGroup))
 	ref, err := name.ParseReference(imageName)
 	if err != nil {
 		handleError(log, response, "error parsing image reference", err)
@@ -198,41 +199,66 @@ func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionRespons
 
 	log.Debug("evaluating policy against image", zap.String("resourceUri", imageResourceUri))
 
-	res, err := e.rode.EvaluatePolicy(context.Background(), &rode.EvaluatePolicyRequest{
-		Policy:      e.config.PolicyId,
+	res, err := e.rode.EvaluateResource(ctx, &rode.ResourceEvaluationRequest{
+		PolicyGroup: e.config.PolicyGroup,
 		ResourceUri: imageResourceUri,
+		Source: &rode.ResourceEvaluationSource{
+			Name: e.config.Name,
+		},
 	})
-
 	if err != nil {
 		handleError(log, response, "error evaluating policy", err)
 		return false
 	}
 
-	if res.Pass {
+	if res.ResourceEvaluation.Pass {
 		return true
 	}
 
-	log.Info("policy evaluation failed", zap.Any("result", res.Result))
-	policyName := e.getPolicyName(log)
+	evaluationSummary, err := e.getEvaluationSummary(ctx, ref.Name(), res)
+	if err != nil {
+		handleError(log, response, "error getting evaluation summary", err)
+		return false
+	}
 
 	response.Result = &metav1.Status{
-		Message: fmt.Sprintf(`container image "%s" failed the Rode policy "%s" (id: %s)`, ref.Name(), policyName, e.config.PolicyId),
+		Message: evaluationSummary,
 	}
 
 	return false
 }
 
-func (e *Enforcer) getPolicyName(log *zap.Logger) string {
-	policy, err := e.rode.GetPolicy(context.Background(), &rode.GetPolicyRequest{
-		Id: e.config.PolicyId,
-	})
+func (e *Enforcer) getEvaluationSummary(ctx context.Context, imageName string, resourceEvaluationResult *rode.ResourceEvaluationResult) (string, error) {
+	var sb strings.Builder
 
-	if err != nil {
-		log.Error("failed to retrieve policy", zap.Error(err))
-		return ""
+	sb.WriteString(fmt.Sprintf(`container image "%s" %s evaluation against the rode policy group "%s": `, imageName, policyResult(resourceEvaluationResult.ResourceEvaluation.Pass), resourceEvaluationResult.ResourceEvaluation.PolicyGroup))
+
+	for i, policyEvaluation := range resourceEvaluationResult.PolicyEvaluations {
+		policy, err := e.rode.GetPolicy(ctx, &rode.GetPolicyRequest{
+			Id: policyEvaluation.PolicyVersionId,
+		})
+		if err != nil {
+			return "", err
+		}
+
+		sb.WriteString(fmt.Sprintf(`policy "%s" %s`, policy.Name, strings.ToUpper(policyResult(policyEvaluation.Pass))))
+
+		if i != len(resourceEvaluationResult.PolicyEvaluations)-1 {
+			sb.WriteString(" | ")
+		}
 	}
 
-	return policy.Name
+	sb.WriteString("\n")
+
+	return sb.String(), nil
+}
+
+func policyResult(passed bool) string {
+	if passed {
+		return "passed"
+	}
+
+	return "failed"
 }
 
 func handleError(log *zap.Logger, response *v1.AdmissionResponse, message string, err error) {
