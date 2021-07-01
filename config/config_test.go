@@ -38,7 +38,7 @@ var _ = DescribeTable("config",
 		}
 	},
 	Entry("base config", entry{
-		flags: []string{"--policy-id=foo", "--tls-secret=foo/bar", "--rode-host=localhost:50051"},
+		flags: []string{"--policy-group=foo", "--tls-secret=foo/bar", "--rode-host=localhost:50051"},
 		expected: &Config{
 			Tls: &TlsConfig{
 				Secret:    "foo/bar",
@@ -49,27 +49,28 @@ var _ = DescribeTable("config",
 				InCluster:  true,
 				ConfigFile: filepath.Join(homedir.HomeDir(), ".kube", "config"),
 			},
-			PolicyId: "foo",
+			PolicyGroup: "foo",
 			Rode: &RodeConfig{
 				Host: "localhost:50051",
 			},
 			Port: 8001,
+			Name: "k8s-enforcer",
 		},
 	}),
-	Entry("missing policy ID", entry{
+	Entry("missing policy group", entry{
 		flags:       []string{"--tls-secret=foo/bar", "--rode-host=localhost:50051"},
 		expectError: true,
 	}),
 	Entry("missing tls secret", entry{
-		flags:       []string{"--policy-id=foo", "--rode-host=localhost:50051"},
+		flags:       []string{"--policy-group=foo", "--rode-host=localhost:50051"},
 		expectError: true,
 	}),
 	Entry("missing rode host", entry{
-		flags:       []string{"--policy-id=foo", "--tls-secret=foo/bar"},
+		flags:       []string{"--policy-group=foo", "--tls-secret=foo/bar"},
 		expectError: true,
 	}),
 	Entry("bad tls secret namespaced name", entry{
-		flags:       []string{"--policy-id=foo", "--tls-secret=foo", "--rode-host=localhost:50051"},
+		flags:       []string{"--policy-group=foo", "--tls-secret=foo", "--rode-host=localhost:50051"},
 		expectError: true,
 	}),
 	Entry("bad flag parsing", entry{
