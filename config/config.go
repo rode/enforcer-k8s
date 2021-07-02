@@ -28,10 +28,11 @@ type Config struct {
 	RegistryInsecureSkipVerify bool
 	Kubernetes                 *KubernetesConfig
 	Namespace                  string
-	PolicyId                   string
+	PolicyGroup                string
 	Port                       int
 	Rode                       *RodeConfig
 	Tls                        *TlsConfig
+	Name                       string
 }
 
 type RodeConfig struct {
@@ -59,13 +60,14 @@ func Build(name string, args []string) (*Config, error) {
 		Rode:       &RodeConfig{},
 	}
 
-	flags.StringVar(&conf.PolicyId, "policy-id", "", "the ID of the rode policy to evaluate when attempting to admit a pod")
+	flags.StringVar(&conf.PolicyGroup, "policy-group", "", "the name of the rode policy group to evaluate against when attempting to admit a pod")
 	flags.StringVar(&conf.Tls.Secret, "tls-secret", "", "the namespaced name of the TLS secret containing the certificate / private key for the webhook TLS configuration. should be in the format ${namespace}/${name}")
 	flags.StringVar(&conf.Rode.Host, "rode-host", "", "rode host")
 	flags.BoolVar(&conf.Rode.Insecure, "rode-insecure", false, "when set, the connection to rode will not use TLS")
 	flags.BoolVar(&conf.RegistryInsecureSkipVerify, "registry-insecure-skip-verify", false, "when set, TLS connections to container registries will be insecure")
 	flags.BoolVar(&conf.Debug, "debug", false, "when set, debug mode will be enabled")
 	flags.IntVar(&conf.Port, "port", 8001, "the port to bind")
+	flags.StringVar(&conf.Name, "name", "k8s-enforcer", "the name of this enforcer, used when reporting resource evaluation results to rode")
 
 	flags.BoolVar(&conf.Kubernetes.InCluster, "k8s-in-cluster", true, "when set, the enforcer will use the in-cluster k8s config")
 	flags.StringVar(&conf.Kubernetes.ConfigFile, "k8s-config-file", filepath.Join(homedir.HomeDir(), ".kube", "config"), "path to k8s config file when running outside the cluster")
@@ -75,8 +77,8 @@ func Build(name string, args []string) (*Config, error) {
 		return nil, err
 	}
 
-	if conf.PolicyId == "" {
-		return nil, errors.New("--policy-id is required")
+	if conf.PolicyGroup == "" {
+		return nil, errors.New("--policy-group is required")
 	}
 
 	if conf.Tls.Secret == "" {
