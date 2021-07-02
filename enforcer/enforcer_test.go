@@ -466,7 +466,7 @@ var _ = Describe("Enforcer", func() {
 
 			It("should deny the request with a message", func() {
 				Expect(actualResponse.Allowed).To(BeFalse())
-				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`failed evaluation against the rode policy group "%s"`, expectedPolicyGroup)))
+				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`failed evaluation against the Rode policy group "%s"`, expectedPolicyGroup)))
 				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`policy "%s"`, expectedPolicyName)))
 			})
 
@@ -507,7 +507,7 @@ var _ = Describe("Enforcer", func() {
 
 			It("should deny the request with a message", func() {
 				Expect(actualResponse.Allowed).To(BeFalse())
-				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`failed evaluation against the rode policy group "%s"`, expectedPolicyGroup)))
+				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`failed evaluation against the Rode policy group "%s"`, expectedPolicyGroup)))
 				Expect(actualResponse.Result.Message).To(ContainSubstring(fmt.Sprintf(`policy "%s" PASSED | policy "%s" FAILED`, expectedPolicyName, expectedFailingPolicy.Name)))
 			})
 		})
