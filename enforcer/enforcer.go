@@ -161,7 +161,7 @@ func (e *Enforcer) fetchImagePullSecrets(pod *corev1.Pod) ([]*imagePullSecret, e
 
 func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionResponse, imageName string, pullSecrets []*imagePullSecret) bool {
 	ctx := context.Background()
-	log = log.With(zap.String("image", imageName)).With(zap.String("policy group", e.config.PolicyGroup))
+	log = log.With(zap.String("image", imageName)).With(zap.String("policyGroup", e.config.PolicyGroup))
 	ref, err := name.ParseReference(imageName)
 	if err != nil {
 		handleError(log, response, "error parsing image reference", err)
@@ -231,7 +231,7 @@ func (e *Enforcer) evaluatePolicy(log *zap.Logger, response *v1.AdmissionRespons
 func (e *Enforcer) getEvaluationSummary(ctx context.Context, imageName string, resourceEvaluationResult *rode.ResourceEvaluationResult) (string, error) {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf(`container image "%s" %s evaluation against the rode policy group "%s": `, imageName, policyResult(resourceEvaluationResult.ResourceEvaluation.Pass), resourceEvaluationResult.ResourceEvaluation.PolicyGroup))
+	sb.WriteString(fmt.Sprintf(`container image "%s" %s evaluation against the Rode policy group "%s": `, imageName, policyResult(resourceEvaluationResult.ResourceEvaluation.Pass), resourceEvaluationResult.ResourceEvaluation.PolicyGroup))
 
 	for i, policyEvaluation := range resourceEvaluationResult.PolicyEvaluations {
 		policy, err := e.rode.GetPolicy(ctx, &rode.GetPolicyRequest{
