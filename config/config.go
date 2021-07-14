@@ -17,6 +17,7 @@ package config
 import (
 	"errors"
 	"flag"
+	"github.com/rode/rode/common"
 	"path/filepath"
 	"strings"
 
@@ -30,14 +31,9 @@ type Config struct {
 	Namespace                  string
 	PolicyGroup                string
 	Port                       int
-	Rode                       *RodeConfig
+	ClientConfig               *common.ClientConfig
 	Tls                        *TlsConfig
 	Name                       string
-}
-
-type RodeConfig struct {
-	Host     string
-	Insecure bool
 }
 
 type TlsConfig struct {
@@ -55,15 +51,13 @@ func Build(name string, args []string) (*Config, error) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 
 	conf := &Config{
-		Tls:        &TlsConfig{},
-		Kubernetes: &KubernetesConfig{},
-		Rode:       &RodeConfig{},
+		Tls:          &TlsConfig{},
+		Kubernetes:   &KubernetesConfig{},
+		ClientConfig: common.SetupRodeClientFlags(flags),
 	}
 
 	flags.StringVar(&conf.PolicyGroup, "policy-group", "", "the name of the rode policy group to evaluate against when attempting to admit a pod")
 	flags.StringVar(&conf.Tls.Secret, "tls-secret", "", "the namespaced name of the TLS secret containing the certificate / private key for the webhook TLS configuration. should be in the format ${namespace}/${name}")
-	flags.StringVar(&conf.Rode.Host, "rode-host", "", "rode host")
-	flags.BoolVar(&conf.Rode.Insecure, "rode-insecure", false, "when set, the connection to rode will not use TLS")
 	flags.BoolVar(&conf.RegistryInsecureSkipVerify, "registry-insecure-skip-verify", false, "when set, TLS connections to container registries will be insecure")
 	flags.BoolVar(&conf.Debug, "debug", false, "when set, debug mode will be enabled")
 	flags.IntVar(&conf.Port, "port", 8001, "the port to bind")
@@ -85,7 +79,7 @@ func Build(name string, args []string) (*Config, error) {
 		return nil, errors.New("--tls-secret is required")
 	}
 
-	if conf.Rode.Host == "" {
+	if conf.ClientConfig.Rode.Host == "" {
 		return nil, errors.New("--rode-host is required")
 	}
 
