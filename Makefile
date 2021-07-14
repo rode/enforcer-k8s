@@ -8,10 +8,6 @@ fmtcheck:
 fmt:
 	gofmt -w -s $(GOFMT_FILES)
 
-mocks:
-	go install github.com/maxbrunsfeld/counterfeiter/v6@v6.4.1
-	COUNTERFEITER_NO_GENERATE_WARNING="true" go generate ./...
-
 license:
 	addlicense -c 'The Rode Authors' $(GOFMT_FILES)
 
