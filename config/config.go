@@ -17,6 +17,7 @@ package config
 import (
 	"errors"
 	"flag"
+	"github.com/peterbourgon/ff/v3"
 	"github.com/rode/rode/common"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,7 @@ func Build(name string, args []string) (*Config, error) {
 	flags.BoolVar(&conf.Kubernetes.InCluster, "k8s-in-cluster", true, "when set, the enforcer will use the in-cluster k8s config")
 	flags.StringVar(&conf.Kubernetes.ConfigFile, "k8s-config-file", filepath.Join(homedir.HomeDir(), ".kube", "config"), "path to k8s config file when running outside the cluster")
 
-	err := flags.Parse(args)
+	err := ff.Parse(flags, args, ff.WithEnvVarNoPrefix())
 	if err != nil {
 		return nil, err
 	}
