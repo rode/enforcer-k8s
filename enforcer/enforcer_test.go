@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rode/rode/proto/v1alpha1fakes"
 	"google.golang.org/grpc"
 	"net/http"
 	"strings"
@@ -31,7 +32,6 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/rode/enforcer-k8s/config"
-	"github.com/rode/enforcer-k8s/mocks"
 	rode "github.com/rode/rode/proto/v1alpha1"
 	v1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -46,7 +46,7 @@ var _ = Describe("Enforcer", func() {
 		expectedEnforcerName string
 		conf                 *config.Config
 		enforcer             *Enforcer
-		mockRode             *mocks.FakeRodeClient
+		mockRode             *v1alpha1fakes.FakeRodeClient
 		mockK8sClient        = k8sfake.NewSimpleClientset()
 	)
 
@@ -57,7 +57,7 @@ var _ = Describe("Enforcer", func() {
 			PolicyGroup: expectedPolicyGroup,
 			Name:        expectedEnforcerName,
 		}
-		mockRode = &mocks.FakeRodeClient{}
+		mockRode = &v1alpha1fakes.FakeRodeClient{}
 
 		enforcer = NewEnforcer(
 			logger,

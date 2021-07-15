@@ -17,6 +17,7 @@ package config
 import (
 	. "github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
+	"github.com/rode/rode/common"
 	"k8s.io/client-go/util/homedir"
 	"path/filepath"
 )
@@ -50,8 +51,12 @@ var _ = DescribeTable("config",
 				ConfigFile: filepath.Join(homedir.HomeDir(), ".kube", "config"),
 			},
 			PolicyGroup: "foo",
-			Rode: &RodeConfig{
-				Host: "localhost:50051",
+			ClientConfig: &common.ClientConfig{
+				Rode: &common.RodeClientConfig{
+					Host: "localhost:50051",
+				},
+				OIDCAuth:  &common.OIDCAuthConfig{},
+				BasicAuth: &common.BasicAuthConfig{},
 			},
 			Port: 8001,
 			Name: "k8s-enforcer",
@@ -63,10 +68,6 @@ var _ = DescribeTable("config",
 	}),
 	Entry("missing tls secret", entry{
 		flags:       []string{"--policy-group=foo", "--rode-host=localhost:50051"},
-		expectError: true,
-	}),
-	Entry("missing rode host", entry{
-		flags:       []string{"--policy-group=foo", "--tls-secret=foo/bar"},
 		expectError: true,
 	}),
 	Entry("bad tls secret namespaced name", entry{

@@ -20,24 +20,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rode/enforcer-k8s/config"
+	"github.com/rode/enforcer-k8s/enforcer"
+	"github.com/rode/rode/common"
 	"io/ioutil"
+	"k8s.io/client-go/tools/clientcmd"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
-
-	"github.com/rode/enforcer-k8s/config"
-	"github.com/rode/enforcer-k8s/enforcer"
-	"google.golang.org/grpc/credentials"
-	"k8s.io/client-go/tools/clientcmd"
-
-	"google.golang.org/grpc"
 
 	"go.uber.org/zap"
 
-	rode "github.com/rode/rode/proto/v1alpha1"
 	"k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -121,26 +116,6 @@ func newK8sClient(logger *zap.Logger, kubernetesConfig *config.KubernetesConfig)
 	return client
 }
 
-func newRodeClient(logger *zap.Logger, conf *config.Config) (*grpc.ClientConn, rode.RodeClient) {
-	dialOptions := []grpc.DialOption{
-		grpc.WithBlock(),
-	}
-	if conf.Rode.Insecure {
-		dialOptions = append(dialOptions, grpc.WithInsecure())
-	} else {
-		dialOptions = append(dialOptions, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-	conn, err := grpc.DialContext(ctx, conf.Rode.Host, dialOptions...)
-	if err != nil {
-		logger.Fatal("failed to establish grpc connection to Rode", zap.Error(err))
-	}
-
-	return conn, rode.NewRodeClient(conn)
-}
-
 func createTlsConfig(logger *zap.Logger, conf *config.Config, client *kubernetes.Clientset) *tls.Config {
 	secret, err := client.CoreV1().Secrets(conf.Tls.Namespace).Get(context.Background(), conf.Tls.Name, metav1.GetOptions{})
 	if err != nil {
@@ -188,8 +163,10 @@ func main() {
 
 	client := newK8sClient(logger, conf.Kubernetes)
 
-	conn, rodeClient := newRodeClient(logger, conf)
-	defer conn.Close()
+	rodeClient, err := common.NewRodeClient(conf.ClientConfig)
+	if err != nil {
+		logger.Fatal("could not create rode client", zap.Error(err))
+	}
 
 	k8sEnforcer := enforcer.NewEnforcer(
 		logger.Named("Enforcer"),
@@ -207,7 +184,7 @@ func main() {
 	}
 
 	go func() {
-		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err = server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatal("error starting server", zap.Error(err))
 		}
 	}()
