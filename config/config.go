@@ -80,10 +80,6 @@ func Build(name string, args []string) (*Config, error) {
 		return nil, errors.New("--tls-secret is required")
 	}
 
-	if conf.ClientConfig.Rode.Host == "" {
-		return nil, errors.New("--rode-host is required")
-	}
-
 	if parts := strings.Split(conf.Tls.Secret, "/"); len(parts) != 2 {
 		return nil, errors.New("expected tls secret to be in the format ${namespace}/${name}")
 	} else {
